@@ -51,6 +51,17 @@ class Product(Base):
     unit_price = Column(Float, nullable=False)
     unit_cost_encrypted = Column(String, nullable=False)
     warehouse_capacity_limit = Column(Float, nullable=True)
+    
+    # Phase 3: Retail/POS extensions
+    barcode = Column(String, nullable=True)
+    sku = Column(String, nullable=True)
+    min_stock = Column(Integer, default=0)
+    max_stock = Column(Integer, default=1000)
+    is_active = Column(Boolean, default=True)
+
+    __table_args__ = (
+        UniqueConstraint('tenant_id', 'barcode', name='uq_tenant_barcode'),
+    )
 
     @property
     def unit_cost(self) -> float:
@@ -102,6 +113,77 @@ class FinanceLedger(Base):
     def budget_per_period(self, val: float):
         self.budget_per_period_encrypted = encrypt_val(val)
 
+# ── Phase 3: Retail POS & Store Management Tables ─────────────────────────────
+
+class Customer(Base):
+    __tablename__ = "customers"
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id = Column(String, ForeignKey("tenants.id"), nullable=False)
+    name = Column(String, nullable=False)
+    phone = Column(String, nullable=True)
+    email = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class Sale(Base):
+    __tablename__ = "sales"
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id = Column(String, ForeignKey("tenants.id"), nullable=False)
+    customer_id = Column(String, ForeignKey("customers.id"), nullable=True)
+    user_id = Column(String, ForeignKey("users.id"), nullable=False)
+    payment_method = Column(String, nullable=False)
+    discount = Column(Float, default=0.0)
+    tax = Column(Float, default=0.0)
+    subtotal = Column(Float, nullable=False)
+    total = Column(Float, nullable=False)
+    status = Column(String, default="completed") # completed, held
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class SaleItem(Base):
+    __tablename__ = "sale_items"
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    sale_id = Column(String, ForeignKey("sales.id"), nullable=False)
+    product_id = Column(String, ForeignKey("products.id"), nullable=False)
+    qty = Column(Integer, nullable=False)
+    unit_price = Column(Float, nullable=False)
+    discount = Column(Float, default=0.0)
+
+class SupplierProfile(Base):
+    __tablename__ = "supplier_profiles"
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id = Column(String, ForeignKey("tenants.id"), nullable=False)
+    name = Column(String, nullable=False)
+    contact_phone = Column(String, nullable=True)
+    contact_email = Column(String, nullable=True)
+    address = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class PurchaseOrder(Base):
+    __tablename__ = "purchase_orders"
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id = Column(String, ForeignKey("tenants.id"), nullable=False)
+    supplier_profile_id = Column(String, ForeignKey("supplier_profiles.id"), nullable=False)
+    status = Column(String, default="draft") # draft, ordered, received
+    created_at = Column(DateTime, default=datetime.utcnow)
+    received_at = Column(DateTime, nullable=True)
+
+class PurchaseOrderItem(Base):
+    __tablename__ = "purchase_order_items"
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    po_id = Column(String, ForeignKey("purchase_orders.id"), nullable=False)
+    product_id = Column(String, ForeignKey("products.id"), nullable=False)
+    qty = Column(Integer, nullable=False)
+    unit_cost = Column(Float, nullable=False)
+
+class StockMovement(Base):
+    __tablename__ = "stock_movements"
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id = Column(String, ForeignKey("tenants.id"), nullable=False)
+    product_id = Column(String, ForeignKey("products.id"), nullable=False)
+    delta = Column(Integer, nullable=False)
+    reason = Column(String, nullable=False) # sale, po_receipt, manual_adj
+    reference_id = Column(String, nullable=True) # sale_id or po_id
+    created_at = Column(DateTime, default=datetime.utcnow)
+
 # ── Phase 2: Supplier table ───────────────────────────────────────────────────
 
 class Supplier(Base):
@@ -120,6 +202,9 @@ class Supplier(Base):
     lead_time_std_dev = Column(Float, nullable=False, default=1.5)
     reliability_score = Column(Float, nullable=False, default=0.85)  # [0, 1]
     min_order_qty = Column(Integer, nullable=False, default=10)
+    
+    # Phase 3: Link delivery profile to global Supplier Profile
+    supplier_profile_id = Column(String, ForeignKey("supplier_profiles.id"), nullable=True)
 
 # ── AMDIE tracking tables (Phase 2 — decision_type scoped) ───────────────────
 
@@ -198,6 +283,12 @@ def _backfill_decision_type(engine):
             ("tenants", "enables_hr_agent", "BOOLEAN DEFAULT 0"),
             ("decision_logs", "decision_type", "VARCHAR DEFAULT 'reorder_quantity'"),
             ("historical_accuracy_logs", "decision_type", "VARCHAR DEFAULT 'reorder_quantity'"),
+            ("products", "barcode", "VARCHAR"),
+            ("products", "sku", "VARCHAR"),
+            ("products", "min_stock", "INTEGER DEFAULT 0"),
+            ("products", "max_stock", "INTEGER DEFAULT 1000"),
+            ("products", "is_active", "BOOLEAN DEFAULT 1"),
+            ("suppliers", "supplier_profile_id", "VARCHAR"),
         ]
         for table, col, col_type in column_additions:
             try:

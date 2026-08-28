@@ -1,9 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Login from './Login';
-import OwnerDashboard from './OwnerDashboard';
-import MaintenanceDashboard from './MaintenanceDashboard';
+import { Layout } from './components/Layout';
+import { Dashboard, POS, Inventory, Purchases, Customers, AiAssistant } from './pages';
+import { ToastProvider } from './components/ToastProvider';
 import './App.css';
+import './index.css';
 
 function App() {
   const [token, setToken] = useState(localStorage.getItem('token'));
@@ -24,15 +26,12 @@ function App() {
   };
 
   const ProtectedRoute = ({ children, allowedRoles }) => {
-    if (!token) {
-      return <Navigate to="/login" replace />;
-    }
+    if (!token) return <Navigate to="/login" replace />;
     if (allowedRoles && !allowedRoles.includes(role)) {
       return (
-        <div style={{ color: 'white', padding: '50px', textAlign: 'center', background: 'var(--bg-color)', height: '100vh' }}>
+        <div style={{ padding: '50px', textAlign: 'center', color: '#f87171' }}>
           <h2>403 - Forbidden</h2>
-          <p style={{ margin: '20px 0' }}>Your current role ({role}) does not have permission to view this page.</p>
-          <button onClick={handleLogout} className="glow-btn">Return to Login</button>
+          <p>Your role ({role}) cannot access this area.</p>
         </div>
       );
     }
@@ -40,37 +39,57 @@ function App() {
   };
 
   return (
-    <BrowserRouter>
+    <ToastProvider>
+      <BrowserRouter>
       <Routes>
         <Route 
           path="/login" 
-          element={token ? <Navigate to={role === 'owner' ? '/owner' : '/maintenance'} replace /> : <Login onLogin={handleLogin} />} 
+          element={token ? <Navigate to="/dashboard" replace /> : <Login onLogin={handleLogin} />} 
         />
         
-        <Route 
-          path="/owner" 
-          element={
-            <ProtectedRoute allowedRoles={['owner']}>
-              <OwnerDashboard token={token} onLogout={handleLogout} />
+        {/* Main Application Routes inside Layout */}
+        <Route path="/" element={token ? <Layout role={role} onLogout={handleLogout} /> : <Navigate to="/login" />}>
+          <Route index element={<Navigate to="/dashboard" replace />} />
+          
+          <Route path="dashboard" element={
+            <ProtectedRoute allowedRoles={['owner', 'inventory_manager', 'procurement_officer', 'finance_officer']}>
+              <Dashboard token={token} />
             </ProtectedRoute>
-          } 
-        />
-        
-        <Route 
-          path="/maintenance" 
-          element={
-            <ProtectedRoute allowedRoles={['maintenance']}>
-              <MaintenanceDashboard token={token} onLogout={handleLogout} />
+          } />
+          
+          <Route path="pos" element={
+            <ProtectedRoute allowedRoles={['owner', 'cashier']}>
+              <POS token={token} role={role} />
             </ProtectedRoute>
-          } 
-        />
-
-        <Route 
-          path="/" 
-          element={<Navigate to={token ? (role === 'owner' ? '/owner' : '/maintenance') : '/login'} replace />} 
-        />
+          } />
+          
+          <Route path="inventory" element={
+            <ProtectedRoute allowedRoles={['owner', 'cashier', 'inventory_manager', 'procurement_officer', 'finance_officer']}>
+              <Inventory token={token} role={role} />
+            </ProtectedRoute>
+          } />
+          
+          <Route path="purchases" element={
+            <ProtectedRoute allowedRoles={['owner', 'procurement_officer', 'finance_officer']}>
+              <Purchases token={token} role={role} />
+            </ProtectedRoute>
+          } />
+          
+          <Route path="customers" element={
+            <ProtectedRoute allowedRoles={['owner', 'cashier', 'finance_officer']}>
+              <Customers token={token} />
+            </ProtectedRoute>
+          } />
+          
+          <Route path="ai" element={
+            <ProtectedRoute allowedRoles={['owner', 'inventory_manager', 'procurement_officer', 'finance_officer']}>
+              <AiAssistant token={token} />
+            </ProtectedRoute>
+          } />
+        </Route>
       </Routes>
-    </BrowserRouter>
+      </BrowserRouter>
+    </ToastProvider>
   );
 }
 

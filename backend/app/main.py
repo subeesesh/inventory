@@ -1,3 +1,10 @@
+import sys
+import os
+
+# Ensure backend root is always in sys.path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from backend.app.config import settings
@@ -5,6 +12,8 @@ from backend.app.db import init_db
 from backend.app.generator import seed_db_script
 from backend.app.api import router
 from backend.app.auth_routes import router as auth_router
+from backend.app.retail_routes import router as retail_router
+
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -23,6 +32,7 @@ app.add_middleware(
 
 # Register routes
 app.include_router(auth_router, prefix="/api")
+app.include_router(retail_router, prefix="/api")
 app.include_router(router, prefix="/api")
 
 @app.on_event("startup")

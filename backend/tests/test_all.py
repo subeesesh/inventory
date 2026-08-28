@@ -303,3 +303,165 @@ def test_decision_type_db_isolation():
     assert reorder_fetched.decision_type == "reorder_quantity"
     assert price_fetched.decision_type == "price_adjustment"
     db.close()
+
+
+# ── Phase 3 New Tests (Retail & POS) ──────────────────────────────────────────
+from fastapi.testclient import TestClient
+from backend.app.main import app
+from backend.app.auth import create_access_token
+from backend.app.db import get_db
+
+client = TestClient(app)
+
+from sqlalchemy.pool import StaticPool
+
+engine_test = create_engine(
+    "sqlite:///:memory:",
+    connect_args={"check_same_thread": False},
+    poolclass=StaticPool
+)
+TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine_test)
+
+def override_get_db():
+    db = TestingSessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+app.dependency_overrides[get_db] = override_get_db
+
+@pytest.fixture(scope="module", autouse=True)
+def setup_test_db():
+    Base.metadata.create_all(bind=engine_test)
+    db = TestingSessionLocal()
+    
+    from backend.app.db import Tenant, User, Product, InventoryState
+    t = Tenant(id="t-test", name="Test Tenant", api_key_hash="hash")
+    db.add(t)
+    
+    roles = ["owner", "cashier", "inventory_manager", "procurement_officer", "finance_officer"]
+    for r in roles:
+        db.add(User(id=f"u-{r}", tenant_id="t-test", email=f"{r}@test.com", password_hash="hash", role=r))
+        
+    prod = Product(id="p-test", tenant_id="t-test", name="Test Prod", category="Test", unit_price=10.0, unit_cost=5.0)
+    db.add(prod)
+    inv = InventoryState(product_id="p-test", tenant_id="t-test", stock_level=100, lead_time_days=7, reorder_point=10)
+    db.add(inv)
+    
+    db.commit()
+    db.close()
+    yield
+    Base.metadata.drop_all(bind=engine_test)
+
+def get_auth_headers(role: str):
+    token = create_access_token(data={"sub": f"u-{role}"})
+    return {"Authorization": f"Bearer {token}"}
+
+# 13. RBAC Enforcement Test
+def test_rbac_cashier():
+    headers = get_auth_headers("cashier")
+    
+    # Allowed route (checkout)
+    res_allowed = client.post("/api/tenants/pos/checkout", json={
+        "payment_method": "cash",
+        "subtotal": 10.0,
+        "total": 10.0,
+        "items": [{"product_id": "p-test", "qty": 1, "unit_price": 10.0}]
+    }, headers=headers)
+    assert res_allowed.status_code == 200
+    
+    # Forbidden route (reports - profit)
+    res_forbidden = client.get("/api/tenants/reports?type=profit", headers=headers)
+    assert res_forbidden.status_code == 403
+
+def test_rbac_owner():
+    headers = get_auth_headers("owner")
+    # Allowed route (reports)
+    res_allowed = client.get("/api/tenants/reports?type=profit", headers=headers)
+    assert res_allowed.status_code == 200
+
+# 14. POS Checkout Trace Test
+def test_pos_checkout_trace():
+    headers = get_auth_headers("cashier")
+    db = TestingSessionLocal()
+    from backend.app.db import InventoryState, StockMovement, SalesRecord
+    
+    initial_inv = db.query(InventoryState).filter_by(product_id="p-test").first().stock_level
+    
+    res = client.post("/api/tenants/pos/checkout", json={
+        "payment_method": "card",
+        "subtotal": 20.0,
+        "total": 20.0,
+        "items": [{"product_id": "p-test", "qty": 2, "unit_price": 10.0}]
+    }, headers=headers)
+    assert res.status_code == 200
+    sale_id = res.json()["sale_id"]
+    
+    # Verify Inventory dropped
+    inv = db.query(InventoryState).filter_by(product_id="p-test").first()
+    assert inv.stock_level == initial_inv - 2
+    
+    # Verify StockMovement logged
+    movement = db.query(StockMovement).filter_by(reference_id=sale_id).first()
+    assert movement.reason == "sale"
+    assert movement.delta == -2
+    
+    # Verify SalesRecord updated
+    from datetime import datetime
+    today = datetime.utcnow().date()
+    sr = db.query(SalesRecord).filter_by(product_id="p-test", date=today).first()
+    assert sr.qty_sold >= 2
+    db.close()
+
+# 15. Purchase Order Receive Trace Test
+def test_po_trace():
+    headers = get_auth_headers("procurement_officer")
+    
+    # Create supplier profile
+    res = client.post("/api/tenants/supplier-profiles", json={
+        "name": "Test Supplier"
+    }, headers=headers)
+    supplier_id = res.json()["id"]
+    
+    # Create PO
+    res_po = client.post("/api/tenants/purchase-orders", json={
+        "supplier_profile_id": supplier_id,
+        "items": [{"product_id": "p-test", "qty": 50, "unit_cost": 5.0}]
+    }, headers=headers)
+    assert res_po.status_code == 200
+    po_id = res_po.json()["po_id"]
+    
+    # Receive PO
+    inv_headers = get_auth_headers("inventory_manager")
+    db = TestingSessionLocal()
+    from backend.app.db import InventoryState, StockMovement
+    
+    initial_inv = db.query(InventoryState).filter_by(product_id="p-test").first().stock_level
+    
+    res_receive = client.post(f"/api/tenants/purchase-orders/{po_id}/receive", headers=inv_headers)
+    assert res_receive.status_code == 200
+    
+    # Verify Inventory increased
+    inv = db.query(InventoryState).filter_by(product_id="p-test").first()
+    assert inv.stock_level == initial_inv + 50
+    
+    # Verify StockMovement logged
+    movement = db.query(StockMovement).filter_by(reference_id=po_id).first()
+    assert movement.reason == "po_receipt"
+    assert movement.delta == 50
+    db.close()
+
+# 16. Customer CRUD Test
+def test_customer_crud():
+    headers = get_auth_headers("cashier")
+    res = client.post("/api/tenants/customers", json={
+        "name": "John Doe",
+        "phone": "555-1234"
+    }, headers=headers)
+    assert res.status_code == 200
+    cust_id = res.json()["id"]
+    
+    res_get = client.get(f"/api/tenants/customers/{cust_id}", headers=headers)
+    assert res_get.status_code == 200
+    assert res_get.json()["name"] == "John Doe"

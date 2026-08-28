@@ -77,6 +77,8 @@ class InMemoryVectorDB:
         return results[:limit]
 
 # Global vector DB wrapper
+import importlib
+
 class VectorDBClient:
     def __init__(self):
         self.db_type = settings.VECTOR_DB_TYPE.lower()
@@ -85,7 +87,8 @@ class VectorDBClient:
         
         if self.db_type == "qdrant":
             try:
-                from qdrant_client import QdrantClient
+                qc_mod = importlib.import_module("qdrant_client")
+                QdrantClient = getattr(qc_mod, "QdrantClient")
                 self.qdrant_client = QdrantClient(host=settings.QDRANT_HOST, port=settings.QDRANT_PORT)
                 # Create collection if not exists
                 self.qdrant_client.recreate_collection(
@@ -107,8 +110,9 @@ class VectorDBClient:
         }
 
         if self.db_type == "qdrant" and self.qdrant_client:
-            from qdrant_client.models import PointStruct
             try:
+                models = importlib.import_module("qdrant_client.models")
+                PointStruct = getattr(models, "PointStruct")
                 self.qdrant_client.upsert(
                     collection_name="sme_knowledge",
                     points=[PointStruct(id=doc_id, vector=vector, payload=payload)]
@@ -129,15 +133,19 @@ class VectorDBClient:
         
         # Build standard filter structure for tenant isolation
         if self.db_type == "qdrant" and self.qdrant_client:
-            from qdrant_client.models import Filter, FieldCondition, MatchValue
-            must_conditions = [
-                FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id))
-            ]
-            if doc_type:
-                must_conditions.append(
-                    FieldCondition(key="type", match=MatchValue(value=doc_type))
-                )
             try:
+                models = importlib.import_module("qdrant_client.models")
+                Filter = getattr(models, "Filter")
+                FieldCondition = getattr(models, "FieldCondition")
+                MatchValue = getattr(models, "MatchValue")
+
+                must_conditions = [
+                    FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id))
+                ]
+                if doc_type:
+                    must_conditions.append(
+                        FieldCondition(key="type", match=MatchValue(value=doc_type))
+                    )
                 hits = self.qdrant_client.search(
                     collection_name="sme_knowledge",
                     query_vector=query_vector,
@@ -165,3 +173,4 @@ class VectorDBClient:
         )
 
 vector_db = VectorDBClient()
+

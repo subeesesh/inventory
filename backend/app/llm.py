@@ -1,4 +1,5 @@
 import json
+import importlib
 from backend.app.config import settings
 from backend.app.security import redact_pii
 
@@ -10,19 +11,22 @@ class LLMAdapter:
         
         if self.provider == "openai" and settings.OPENAI_API_KEY:
             try:
-                from openai import OpenAI
+                openai_mod = importlib.import_module("openai")
+                OpenAI = getattr(openai_mod, "OpenAI")
                 self.openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
-            except ImportError:
+            except Exception:
                 print("OpenAI SDK not installed. Falling back to Mock LLM.")
                 self.provider = "mock"
                 
         elif self.provider == "anthropic" and settings.ANTHROPIC_API_KEY:
             try:
-                from anthropic import Anthropic
+                anthropic_mod = importlib.import_module("anthropic")
+                Anthropic = getattr(anthropic_mod, "Anthropic")
                 self.anthropic_client = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-            except ImportError:
+            except Exception:
                 print("Anthropic SDK not installed. Falling back to Mock LLM.")
                 self.provider = "mock"
+
 
     def generate_explanation(self, decision_summary_dict: dict) -> str:
         """

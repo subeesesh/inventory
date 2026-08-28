@@ -9,7 +9,7 @@ import numpy as np
 
 from backend.app.db import (
     get_db, Tenant, Product, DecisionLog, InventoryState, FinanceLedger,
-    AgentAccuracy, User, Supplier, WeightCoefficients,
+    AgentAccuracy, User, Supplier, WeightCoefficients, Sale, PurchaseOrder,
 )
 from backend.app.auth import get_current_tenant, require_role, get_current_user
 from backend.app.retrieval import retrieval_log_var
@@ -96,7 +96,7 @@ def update_tenant_goal(
 @router.get("/tenants/me")
 def get_tenant_info(
     tenant: Tenant = Depends(get_current_tenant),
-    _: bool = Depends(require_role(["owner", "maintenance"]))
+    _: bool = Depends(require_role(["owner", "inventory_manager", "procurement_officer", "finance_officer"]))
 ):
     return {
         "id": tenant.id,
@@ -109,7 +109,7 @@ def get_tenant_info(
 def get_products(
     tenant: Tenant = Depends(get_current_tenant),
     db: Session = Depends(get_db),
-    _: bool = Depends(require_role(["owner", "maintenance"]))
+    _: bool = Depends(require_role(["owner", "cashier", "inventory_manager", "procurement_officer"]))
 ):
     prods = db.query(Product).filter(Product.tenant_id == tenant.id).all()
     results = []
@@ -134,7 +134,7 @@ def get_decisions(
     tenant: Tenant = Depends(get_current_tenant),
     db: Session = Depends(get_db),
     decision_type: Optional[str] = Query(default=None, description="Filter by decision type"),
-    _: bool = Depends(require_role(["owner", "maintenance"]))
+    _: bool = Depends(require_role(["owner", "inventory_manager", "procurement_officer", "finance_officer"]))
 ):
     query = db.query(DecisionLog).filter(DecisionLog.tenant_id == tenant.id)
     if decision_type:
@@ -164,7 +164,7 @@ def trigger_decision(
     req: TriggerDecisionRequest,
     tenant: Tenant = Depends(get_current_tenant),
     db: Session = Depends(get_db),
-    _: bool = Depends(require_role(["owner"]))
+    _: bool = Depends(require_role(["owner", "inventory_manager", "procurement_officer"]))
 ):
     # Validate decision_type
     if not validate_decision_type(req.decision_type):
@@ -335,7 +335,7 @@ def get_decision_explain(
     tenant: Tenant = Depends(get_current_tenant),
     user: Optional[User] = Depends(get_current_user),
     db: Session = Depends(get_db),
-    _: bool = Depends(require_role(["owner", "maintenance"]))
+    _: bool = Depends(require_role(["owner", "inventory_manager", "procurement_officer", "finance_officer"]))
 ):
     log = db.query(DecisionLog).filter_by(id=id, tenant_id=tenant.id).first()
     if not log:
@@ -344,8 +344,11 @@ def get_decision_explain(
     agent_decisions = json.loads(log.agent_decisions)
     opt_problem = json.loads(log.optimization_problem)
 
-    is_maintenance = user and user.role == "maintenance"
-    if is_maintenance:
+    is_finance = user and user.role == "finance_officer"
+    is_owner = user and user.role == "owner"
+    is_redacted = not (is_finance or is_owner)
+    
+    if is_redacted:
         for agent, dec in agent_decisions.items():
             if "expected_cost" in dec:
                 dec["expected_cost"] = "[REDACTED]"
@@ -381,7 +384,7 @@ def submit_outcome(
     req: OutcomeRequest,
     tenant: Tenant = Depends(get_current_tenant),
     db: Session = Depends(get_db),
-    _: bool = Depends(require_role(["owner"]))
+    _: bool = Depends(require_role(["owner", "inventory_manager", "procurement_officer"]))
 ):
     log = db.query(DecisionLog).filter_by(id=id, tenant_id=tenant.id).first()
     if not log:
@@ -404,7 +407,7 @@ def copilot_chat(
     req: ChatRequest,
     tenant: Tenant = Depends(get_current_tenant),
     db: Session = Depends(get_db),
-    _: bool = Depends(require_role(["owner"]))
+    _: bool = Depends(require_role(["owner", "inventory_manager", "procurement_officer", "finance_officer"]))
 ):
     logs = db.query(DecisionLog).filter_by(tenant_id=tenant.id).order_by(DecisionLog.date.desc()).limit(3).all()
     context_str = "Recent decisions:\n"
@@ -431,7 +434,7 @@ def copilot_chat(
 def get_metrics(
     tenant: Tenant = Depends(get_current_tenant),
     db: Session = Depends(get_db),
-    _: bool = Depends(require_role(["owner", "maintenance"]))
+    _: bool = Depends(require_role(["owner", "inventory_manager", "procurement_officer", "finance_officer"]))
 ):
     # 1. Overall cumulative accuracy
     completed_decisions = db.query(DecisionLog).filter(
@@ -493,20 +496,44 @@ def get_metrics(
             "outcomes_logged":     len(completed_dt),
         }
 
-    # 5. Total counts
+    # 5. Total decision counts
     total_decisions = db.query(DecisionLog).filter_by(tenant_id=tenant.id).count()
     conflict_decisions = db.query(DecisionLog).filter_by(tenant_id=tenant.id, conflict_detected=True).count()
 
+    # 6. POS KPIs (Phase 2)
+    today = datetime.utcnow().date()
+    today_sales = db.query(Sale).filter(
+        Sale.tenant_id == tenant.id,
+        Sale.created_at >= datetime.combine(today, datetime.min.time())
+    ).all()
+    total_revenue_today = sum(s.total for s in today_sales)
+    total_transactions_today = len(today_sales)
+
+    all_inv = db.query(InventoryState).filter_by(tenant_id=tenant.id).all()
+    low_stock_count = 0
+    for inv_item in all_inv:
+        prod = db.query(Product).filter_by(id=inv_item.product_id, tenant_id=tenant.id).first()
+        if prod and prod.min_stock is not None and inv_item.stock_level <= prod.min_stock:
+            low_stock_count += 1
+
+    pending_po_count = db.query(PurchaseOrder).filter_by(
+        tenant_id=tenant.id, status="ordered"
+    ).count()
+
     return {
-        "cumulative_accuracy":    avg_accuracy,
-        "cash_balance":           cash,
-        "period_budget":          budget,
-        "agent_reliability":      agent_reliability,
-        "total_decisions":        total_decisions,
-        "conflict_percentage":    (conflict_decisions / max(total_decisions, 1)) * 100.0,
-        # Phase 2: per-decision_type breakdown (visible to both owner and maintenance)
-        "decision_type_stats":    decision_type_stats,
-        "available_decision_types": all_decision_types(),
+        "cumulative_accuracy":       avg_accuracy,
+        "cash_balance":              cash,
+        "period_budget":             budget,
+        "agent_reliability":         agent_reliability,
+        "total_decisions":           total_decisions,
+        "conflict_percentage":       (conflict_decisions / max(total_decisions, 1)) * 100.0,
+        "decision_type_stats":       decision_type_stats,
+        "available_decision_types":  all_decision_types(),
+        # Phase 2 POS KPIs
+        "total_revenue_today":       total_revenue_today,
+        "total_transactions_today":  total_transactions_today,
+        "low_stock_count":           low_stock_count,
+        "pending_po_count":          pending_po_count,
     }
 
 
@@ -517,7 +544,7 @@ def get_suppliers(
     tenant: Tenant = Depends(get_current_tenant),
     db: Session = Depends(get_db),
     product_id: Optional[str] = Query(default=None),
-    _: bool = Depends(require_role(["owner", "maintenance"]))
+    _: bool = Depends(require_role(["owner", "inventory_manager", "procurement_officer", "finance_officer"]))
 ):
     """List suppliers for the tenant. Optionally filter by product_id."""
     query = db.query(Supplier).filter_by(tenant_id=tenant.id)
@@ -587,7 +614,7 @@ def create_supplier(
 
 @router.get("/tenants/decision-types")
 def get_decision_types(
-    _: bool = Depends(require_role(["owner", "maintenance"]))
+    _: bool = Depends(require_role(["owner", "inventory_manager", "procurement_officer", "finance_officer"]))
 ):
     """Return all registered decision types with their participating agents."""
     return {
