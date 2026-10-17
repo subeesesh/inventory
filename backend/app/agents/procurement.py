@@ -29,6 +29,7 @@ import numpy as np
 from sqlalchemy.orm import Session
 
 from backend.app.agents.base import BaseAgent, DecisionObject
+from backend.app.config import settings
 from backend.app.db import (
     SalesRecord, InventoryState, FinanceLedger, Product, Supplier
 )
@@ -48,6 +49,7 @@ class ProcurementAgent(BaseAgent):
         product_id: str,
         run_date: date,
         db: Session,
+        decision_type: str = "reorder_quantity",
     ) -> DecisionObject:
 
         # ── 1. Base context (reuses existing retrieval function) ──────────
@@ -56,6 +58,7 @@ class ProcurementAgent(BaseAgent):
         inventory = context["inventory"]
         sales     = context["sales"]
         ledger    = context["ledger"]
+        on_order  = context.get("on_order", 0)
 
         current_price = product.unit_price if product else 10.0
         unit_cost = product.unit_cost if product else 5.0
@@ -81,18 +84,21 @@ class ProcurementAgent(BaseAgent):
             daily_std = 1.0
 
         # ── 4. Recommendation: demand + safety stock for lead-time variance ─
-        mean_demand_lt = avg_daily_sales * avg_lead_time
+        protection = avg_lead_time + settings.REORDER_REVIEW_PERIOD_DAYS
+        mean_demand_lt = avg_daily_sales * protection
 
-        # Combined variance: demand variance over lead time + lead-time variance in demand
-        # σ²_combined = avg_lead_time * σ²_daily + (avg_daily)² * σ²_lead_time
+        # Combined variance: demand variance over the protection interval + lead-time variance in demand
+        # σ²_combined = (L + R) * σ²_daily + (avg_daily)² * σ²_lead_time
         variance_combined = (
-            avg_lead_time * (daily_std ** 2)
+            protection * (daily_std ** 2)
             + (avg_daily_sales ** 2) * (lead_time_std ** 2)
         )
         safety_stock = _SERVICE_LEVEL_Z * float(np.sqrt(max(variance_combined, 0.0)))
 
-        raw_recommendation = mean_demand_lt + safety_stock - max(0, stock_level - reorder_point)
-        recommendation = float(max(min_order_qty, raw_recommendation))
+        # Order-up-to on inventory position; the supplier MOQ applies only when ordering at all
+        position = stock_level + on_order
+        raw_recommendation = mean_demand_lt + safety_stock - position
+        recommendation = float(max(min_order_qty, raw_recommendation)) if raw_recommendation > 0 else 0.0
 
         # ── 5. Score fields ────────────────────────────────────────────────
         confidence = float(np.clip(
@@ -133,6 +139,7 @@ class ProcurementAgent(BaseAgent):
             f"(std dev = {lead_time_std:.1f} days, reliability = {reliability:.2f}). "
             f"Mean demand during lead time = {mean_demand_lt:.1f} units; "
             f"safety stock (95th pct service level) = {safety_stock:.1f} units. "
+            f"Inventory position = {position} (on hand {stock_level} + on order {on_order}). "
             f"Min order qty constraint = {min_order_qty} units. "
             f"Recommended order = {recommendation:.1f} units. "
             f"Note: this recommendation intentionally differs from the Inventory Agent "

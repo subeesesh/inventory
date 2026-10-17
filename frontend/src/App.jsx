@@ -53,7 +53,7 @@ function App() {
           
           <Route path="dashboard" element={
             <ProtectedRoute allowedRoles={['owner', 'inventory_manager', 'procurement_officer', 'finance_officer']}>
-              <Dashboard token={token} />
+              <Dashboard token={token} role={role} />
             </ProtectedRoute>
           } />
           

@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
+from backend.app.clock import utcnow
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from pydantic import BaseModel
@@ -100,7 +101,7 @@ def checkout(
         db.add(sale)
         db.flush()
 
-        today = datetime.utcnow().date()
+        today = utcnow().date()
 
         for item in req.items:
             sale_item = SaleItem(
@@ -375,7 +376,7 @@ def receive_po(
         raise HTTPException(status_code=400, detail="PO not found or already received")
     
     po.status = "received"
-    po.received_at = datetime.utcnow()
+    po.received_at = utcnow()
 
     items = db.query(PurchaseOrderItem).filter_by(po_id=po.id).all()
     for item in items:
@@ -435,7 +436,7 @@ def get_reports(
         raise HTTPException(status_code=403, detail=f"Role '{user.role}' cannot access report '{type}'")
 
     # Date range — default last 30 days
-    end = datetime.strptime(to_date, "%Y-%m-%d").date() if to_date else datetime.utcnow().date()
+    end = datetime.strptime(to_date, "%Y-%m-%d").date() if to_date else utcnow().date()
     start = datetime.strptime(from_date, "%Y-%m-%d").date() if from_date else end - timedelta(days=29)
     start_dt = datetime.combine(start, datetime.min.time())
     end_dt = datetime.combine(end, datetime.max.time())

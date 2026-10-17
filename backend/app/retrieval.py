@@ -2,7 +2,8 @@ from contextvars import ContextVar
 from datetime import datetime, date, timedelta
 from typing import Optional
 from sqlalchemy.orm import Session
-from backend.app.db import SalesRecord, InventoryState, FinanceLedger, Product
+from sqlalchemy import func
+from backend.app.db import SalesRecord, InventoryState, FinanceLedger, Product, PurchaseOrder, PurchaseOrderItem
 from backend.app.vector_db import vector_db
 import json
 
@@ -79,12 +80,37 @@ def get_postgres_context(tenant_id: str, agent_id: str, product_id: str, current
             "details": f"Cash Balance: {ledger.cash_balance}, Budget: {ledger.budget_per_period}"
         })
 
+    # 5. Open purchase orders: stock already ordered but not yet received.
+    #    Replenishment agents reason on inventory position = on-hand + on-order.
+    on_order = get_on_order_qty(tenant_id, product_id, db)
+    if on_order:
+        log.append({
+            "agent_id": agent_id,
+            "source": "postgres",
+            "table": "purchase_orders",
+            "id": f"{tenant_id}:{product_id}:open",
+            "details": f"On order: {on_order}"
+        })
+
     return {
         "product": product,
         "inventory": inv_state,
         "sales": sales,
-        "ledger": ledger
+        "ledger": ledger,
+        "on_order": on_order,
     }
+
+
+def get_on_order_qty(tenant_id: str, product_id: str, db: Session) -> int:
+    """Units on open (ordered, not yet received) purchase orders for a product."""
+    total = db.query(func.coalesce(func.sum(PurchaseOrderItem.qty), 0)).join(
+        PurchaseOrder, PurchaseOrder.id == PurchaseOrderItem.po_id
+    ).filter(
+        PurchaseOrder.tenant_id == tenant_id,
+        PurchaseOrder.status == "ordered",
+        PurchaseOrderItem.product_id == product_id,
+    ).scalar()
+    return int(total or 0)
 
 def get_vector_context(tenant_id: str, agent_id: str, product_name: str, category: str, decision_type: str, current_date: date, limit: int = 5):
     """Retrieve semantically relevant chunks from Qdrant/vector db and log IDs."""

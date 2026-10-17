@@ -1,4 +1,5 @@
 import uuid
+from backend.app.clock import utcnow
 from datetime import datetime
 from sqlalchemy import create_engine, Column, String, Float, Integer, Date, DateTime, Boolean, ForeignKey, UniqueConstraint, Text
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
@@ -39,7 +40,7 @@ class User(Base):
     email = Column(String, unique=True, index=True, nullable=False)
     password_hash = Column(String, nullable=False)
     role = Column(String, default="owner") # "owner" or "maintenance"
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
     last_login_at = Column(DateTime, nullable=True)
 
 class Product(Base):
@@ -78,7 +79,7 @@ class InventoryState(Base):
     stock_level = Column(Integer, nullable=False)
     lead_time_days = Column(Integer, nullable=False)
     reorder_point = Column(Integer, nullable=False)
-    last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_updated = Column(DateTime, default=utcnow, onupdate=utcnow)
 
 class SalesRecord(Base):
     __tablename__ = "sales_records"
@@ -122,7 +123,7 @@ class Customer(Base):
     name = Column(String, nullable=False)
     phone = Column(String, nullable=True)
     email = Column(String, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
 
 class Sale(Base):
     __tablename__ = "sales"
@@ -136,7 +137,7 @@ class Sale(Base):
     subtotal = Column(Float, nullable=False)
     total = Column(Float, nullable=False)
     status = Column(String, default="completed") # completed, held
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
 
 class SaleItem(Base):
     __tablename__ = "sale_items"
@@ -155,7 +156,7 @@ class SupplierProfile(Base):
     contact_phone = Column(String, nullable=True)
     contact_email = Column(String, nullable=True)
     address = Column(String, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
 
 class PurchaseOrder(Base):
     __tablename__ = "purchase_orders"
@@ -163,7 +164,7 @@ class PurchaseOrder(Base):
     tenant_id = Column(String, ForeignKey("tenants.id"), nullable=False)
     supplier_profile_id = Column(String, ForeignKey("supplier_profiles.id"), nullable=False)
     status = Column(String, default="draft") # draft, ordered, received
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
     received_at = Column(DateTime, nullable=True)
 
 class PurchaseOrderItem(Base):
@@ -182,7 +183,7 @@ class StockMovement(Base):
     delta = Column(Integer, nullable=False)
     reason = Column(String, nullable=False) # sale, po_receipt, manual_adj
     reference_id = Column(String, nullable=True) # sale_id or po_id
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
 
 # ── Phase 2: Supplier table ───────────────────────────────────────────────────
 
@@ -216,7 +217,7 @@ class AgentAccuracy(Base):
     decision_type = Column(String, primary_key=True, default="reorder_quantity")
     last_accuracy = Column(Float, default=1.0)
     reliability = Column(Float, default=1.0)
-    updated_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=utcnow)
 
 class HistoricalAccuracyLog(Base):
     __tablename__ = "historical_accuracy_logs"
@@ -266,7 +267,55 @@ class WeightCoefficients(Base):
     w5 = Column(Float, default=0.15)   # risk_score penalty
     w6 = Column(Float, default=0.15)   # outlier divergence penalty
     trained_on_n_decisions = Column(Integer, default=0)
-    updated_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=utcnow)
+
+
+class StaffShift(Base):
+    __tablename__ = "staff_shifts"
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id = Column(String, ForeignKey("tenants.id"), nullable=False)
+    user_id = Column(String, nullable=True)
+    shift_date = Column(Date, nullable=False)
+    role = Column(String, nullable=False, default="staff")
+    hours = Column(Float, nullable=False, default=8.0)
+    created_at = Column(DateTime, default=utcnow)
+
+
+class MonitoringEvent(Base):
+    __tablename__ = "monitoring_events"
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id = Column(String, ForeignKey("tenants.id"), nullable=False)
+    event_type = Column(String, nullable=False)
+    entity_type = Column(String, nullable=False)
+    entity_id = Column(String, nullable=True)
+    severity = Column(String, default="warning")
+    detected_at = Column(DateTime, default=utcnow)
+    resolved = Column(Boolean, default=False)
+    resolved_at = Column(DateTime, nullable=True)
+
+
+class AutomationAction(Base):
+    """
+    An action proposed by the autonomous pipeline (monitoring -> AMDIE) and
+    routed through the AutomationPolicyEngine.  Routine, low-cost actions are
+    dispatched as notifications immediately; high-impact ones wait for owner review.
+    """
+    __tablename__ = "automation_actions"
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id = Column(String, ForeignKey("tenants.id"), nullable=False)
+    decision_id = Column(String, ForeignKey("decision_logs.id"), nullable=True)
+    monitoring_event_id = Column(String, ForeignKey("monitoring_events.id"), nullable=True)
+    action_type = Column(String, nullable=False)       # = decision_type
+    product_id = Column(String, nullable=True)
+    description = Column(Text, nullable=False)
+    estimated_cost = Column(Float, default=0.0)
+    auto_executable = Column(Boolean, default=False)
+    status = Column(String, default="pending_review")  # notified, pending_review, approved, rejected
+    policy_reason = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=utcnow)
+    reviewed_at = Column(DateTime, nullable=True)
+    reviewed_by = Column(String, nullable=True)
+
 
 
 # ── Database initialisation + Phase 2 migration backfill ─────────────────────
@@ -289,6 +338,7 @@ def _backfill_decision_type(engine):
             ("products", "max_stock", "INTEGER DEFAULT 1000"),
             ("products", "is_active", "BOOLEAN DEFAULT 1"),
             ("suppliers", "supplier_profile_id", "VARCHAR"),
+            ("monitoring_events", "resolved_at", "TIMESTAMP"),
         ]
         for table, col, col_type in column_additions:
             try:

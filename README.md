@@ -272,6 +272,18 @@ CHROMA_PERSIST_DIR=./chroma_db
 LLM_PROVIDER=mock
 # LLM_PROVIDER=openai
 # OPENAI_API_KEY=sk-...
+# LLM_PROVIDER=anthropic
+# ANTHROPIC_API_KEY=sk-ant-...      (model: ANTHROPIC_MODEL_NAME, default claude-sonnet-5-5)
+
+# Security: the defaults are public; always override outside local dev
+# JWT_SECRET=...
+# ENCRYPTION_KEY=...                (Fernet key; changing it makes existing encrypted costs unreadable)
+CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+
+# Continuous monitoring: scan all tenants every N seconds (0 disables)
+MONITORING_INTERVAL_SECONDS=300
+# Autonomous reorders above this cost wait for owner review
+AUTOMATION_AUTO_APPROVAL_COST_LIMIT=500
 
 # Neo4j (optional)
 NEO4J_ENABLED=false

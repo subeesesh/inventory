@@ -46,6 +46,7 @@ class PricingAgent(BaseAgent):
         product_id: str,
         run_date: date,
         db: Session,
+        decision_type: str = "price_adjustment",
     ) -> DecisionObject:
 
         # ── 1. Retrieve product and 180-day price + sales history ─────────

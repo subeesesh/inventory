@@ -1,12 +1,38 @@
 import React, { useState, useEffect } from 'react';
 import { StatCard, Chart, Card, DataTable, Modal, RoleGate } from '../components/ui';
 import { useToast } from '../components/ToastProvider';
+import { WhatIfPanel } from '../components/WhatIfPanel';
+import { AlertsPanel } from '../components/AlertsPanel';
 import api from '../api';
 
 const TRIGGER_ROLES = {
-  reorder_quantity:  ['owner', 'inventory_manager', 'procurement_officer'],
-  price_adjustment:  ['owner', 'finance_officer'],
-  promotion_trigger: ['owner', 'inventory_manager'],
+  reorder_quantity:          ['owner', 'inventory_manager', 'procurement_officer'],
+  price_adjustment:          ['owner', 'finance_officer'],
+  promotion_trigger:         ['owner', 'inventory_manager'],
+  staffing_adjustment:       ['owner', 'inventory_manager', 'finance_officer'],
+  customer_retention_action: ['owner', 'inventory_manager'],
+};
+
+const TYPE_COLORS = {
+  reorder_quantity:          '#60a5fa',
+  price_adjustment:          '#c084fc',
+  promotion_trigger:         '#fbbf24',
+  staffing_adjustment:       '#34d399',
+  customer_retention_action: '#f472b6',
+};
+
+const humanize = (s) => (s || '').replace(/_/g, ' ');
+
+// Present a fused recommendation on its decision type's axis
+const formatRecommendation = (value, decisionType) => {
+  if (typeof value !== 'number') return '—';
+  switch (decisionType) {
+    case 'price_adjustment':          return `${value >= 0 ? '+' : ''}$${value.toFixed(2)}`;
+    case 'promotion_trigger':         return `${(value * 100).toFixed(1)}% discount`;
+    case 'customer_retention_action': return `${(value * 100).toFixed(1)}% retention`;
+    case 'staffing_adjustment':       return `${value >= 0 ? '+' : ''}${value.toFixed(1)} h`;
+    default:                          return `${value.toFixed(1)} units`;
+  }
 };
 
 function Skeleton() {
@@ -30,6 +56,7 @@ export const Dashboard = ({ role }) => {
   const [metrics, setMetrics]       = useState(null);
   const [salesData, setSalesData]   = useState([]);
   const [decisions, setDecisions]   = useState([]);
+  const [products, setProducts]     = useState([]);
   const [loading, setLoading]       = useState(true);
   const [error, setError]           = useState(null);
   const [selectedDecision, setSelectedDecision] = useState(null);
@@ -45,12 +72,14 @@ export const Dashboard = ({ role }) => {
   useEffect(() => {
     const fetchAll = async () => {
       try {
-        const [m, d] = await Promise.all([
+        const [m, d, p] = await Promise.all([
           api.get('/tenants/metrics'),
           api.get('/tenants/decisions'),
+          api.get('/tenants/products').catch(() => []),
         ]);
         setMetrics(m);
         setDecisions((d || []).slice(0, 8));
+        setProducts(p || []);
 
         if (role === 'owner' || role === 'finance_officer') {
           const s = await api.get('/tenants/reports?type=sales_summary');
@@ -66,7 +95,7 @@ export const Dashboard = ({ role }) => {
   }, [role]);
 
   const handleTrigger = async () => {
-    if (!triggerProductId.trim()) { setTriggerError('Product ID is required'); return; }
+    if (!triggerProductId) { setTriggerError('Choose a product'); return; }
     setTriggerLoading(true); setTriggerResult(null); setTriggerError(null);
     try {
       const result = await api.post('/tenants/decisions/trigger', {
@@ -76,6 +105,8 @@ export const Dashboard = ({ role }) => {
       });
       setTriggerResult(result);
       showToast('AMDIE analysis complete', 'success');
+      const d = await api.get('/tenants/decisions');
+      setDecisions((d || []).slice(0, 8));
     } catch (e) {
       setTriggerError(e.message);
     } finally {
@@ -84,15 +115,20 @@ export const Dashboard = ({ role }) => {
   };
 
   const decisionCols = [
-    { header: 'Product', render: r => <span style={{ fontFamily: 'monospace', fontSize: '12px' }}>{(r.product_id || '').slice(0, 12)}…</span> },
+    { header: 'Product', render: r => <span>{productName(r.product_id)}</span> },
     { header: 'Type', render: r => {
-      const colors = { reorder_quantity: '#60a5fa', price_adjustment: '#c084fc', promotion_trigger: '#fbbf24' };
-      return <span style={{ background: `${colors[r.decision_type] || '#94a3b8'}22`, color: colors[r.decision_type] || '#94a3b8', padding: '2px 8px', borderRadius: '12px', fontSize: '12px' }}>{(r.decision_type || '').replace('_', ' ')}</span>;
+      const color = TYPE_COLORS[r.decision_type] || '#94a3b8';
+      return <span style={{ background: `${color}22`, color, padding: '2px 8px', borderRadius: '12px', fontSize: '12px' }}>{humanize(r.decision_type)}</span>;
     }},
-    { header: 'Recommendation', render: r => <span>{typeof r.fused_recommendation === 'number' ? r.fused_recommendation.toFixed(2) : '—'}</span> },
+    { header: 'Recommendation', render: r => <span>{formatRecommendation(r.fused_recommendation, r.decision_type)}</span> },
     { header: '', render: r => r.conflict_detected ? <span title="Conflict detected">⚠️</span> : null },
     { header: 'Date', render: r => r.date ? new Date(r.date).toLocaleDateString() : '—' },
   ];
+
+  function productName(id) {
+    const p = products.find(x => x.id === id);
+    return p ? p.name : (id || '—');
+  }
 
   // Determine which trigger options this role can see
   const visibleTriggerOptions = Object.entries(TRIGGER_ROLES).filter(([, roles]) => roles.includes(role));
@@ -141,12 +177,14 @@ export const Dashboard = ({ role }) => {
         {visibleTriggerOptions.length > 0 && (
           <Card title="Run AMDIE Analysis">
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              <input
+              <select
                 value={triggerProductId}
                 onChange={e => setTriggerProductId(e.target.value)}
-                placeholder="Product ID"
-                style={{ padding: '10px', borderRadius: '6px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.15)', color: '#fff' }}
-              />
+                style={{ padding: '10px', borderRadius: '6px', background: '#1a1a2e', border: '1px solid rgba(255,255,255,0.15)', color: '#fff' }}
+              >
+                <option value="">Select a product…</option>
+                {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
               <input
                 type="date"
                 value={triggerDate}
@@ -159,7 +197,7 @@ export const Dashboard = ({ role }) => {
                 style={{ padding: '10px', borderRadius: '6px', background: '#1a1a2e', border: '1px solid rgba(255,255,255,0.15)', color: '#fff' }}
               >
                 {visibleTriggerOptions.map(([dt]) => (
-                  <option key={dt} value={dt}>{dt.replace(/_/g, ' ')}</option>
+                  <option key={dt} value={dt}>{humanize(dt)}</option>
                 ))}
               </select>
               {triggerError && <span style={{ color: '#f87171', fontSize: '13px' }}>{triggerError}</span>}
@@ -172,7 +210,7 @@ export const Dashboard = ({ role }) => {
               </button>
               {triggerResult && (
                 <div style={{ background: 'rgba(74,222,128,0.08)', border: '1px solid #4ade80', borderRadius: '8px', padding: '12px', fontSize: '13px', color: '#a7f3d0' }}>
-                  <strong>Fused recommendation:</strong> {triggerResult.fused_recommendation?.toFixed(2)}<br />
+                  <strong>Fused recommendation:</strong> {formatRecommendation(triggerResult.fused_recommendation, triggerResult.decision_type)}<br />
                   <strong>Conflict:</strong> {triggerResult.conflict_detected ? '⚠️ Yes' : '✓ No'}<br />
                   <span style={{ color: '#64748b' }}>{triggerResult.explanation?.slice(0, 180)}…</span>
                 </div>
@@ -181,6 +219,14 @@ export const Dashboard = ({ role }) => {
           </Card>
         )}
       </div>
+
+      {/* Monitoring alerts + automation actions */}
+      <AlertsPanel role={role} productName={productName} />
+
+      {/* Counterfactual Scenario Simulation Panel */}
+      <RoleGate allowedRoles={['owner', 'inventory_manager', 'procurement_officer', 'finance_officer']} currentRole={role}>
+        <WhatIfPanel products={products} />
+      </RoleGate>
 
       {/* Recent decisions feed */}
       <Card title="Recent AI Decisions">
@@ -197,13 +243,13 @@ export const Dashboard = ({ role }) => {
 
       {/* Decision detail modal */}
       {selectedDecision && (
-        <Modal title="Decision Detail" onClose={() => setSelectedDecision(null)}>
+        <Modal isOpen title="Decision Detail" onClose={() => setSelectedDecision(null)}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            <p style={{ color: '#94a3b8', fontSize: '13px', margin: 0 }}>Product: <strong style={{ color: '#fff' }}>{selectedDecision.product_id}</strong></p>
-            <p style={{ color: '#94a3b8', fontSize: '13px', margin: 0 }}>Type: <strong style={{ color: '#fff' }}>{selectedDecision.decision_type}</strong></p>
-            <p style={{ color: '#94a3b8', fontSize: '13px', margin: 0 }}>Recommendation: <strong style={{ color: '#4ade80' }}>{selectedDecision.fused_recommendation?.toFixed(4)}</strong></p>
+            <p style={{ color: '#94a3b8', fontSize: '13px', margin: 0 }}>Product: <strong style={{ color: '#fff' }}>{productName(selectedDecision.product_id)}</strong></p>
+            <p style={{ color: '#94a3b8', fontSize: '13px', margin: 0 }}>Type: <strong style={{ color: '#fff' }}>{humanize(selectedDecision.decision_type)}</strong></p>
+            <p style={{ color: '#94a3b8', fontSize: '13px', margin: 0 }}>Recommendation: <strong style={{ color: '#4ade80' }}>{formatRecommendation(selectedDecision.fused_recommendation, selectedDecision.decision_type)}</strong></p>
             <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: '8px', padding: '16px', maxHeight: '300px', overflowY: 'auto', color: '#cbd5e1', fontSize: '13px', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
-              {selectedDecision.explanation || 'No explanation available.'}
+              {selectedDecision.natural_language_explanation || 'No explanation available.'}
             </div>
           </div>
         </Modal>

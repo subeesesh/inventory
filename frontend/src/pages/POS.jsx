@@ -65,8 +65,9 @@ export const POS = ({ role }) => {
   const updateQty = (id, delta) => setCart(prev => prev.map(i => i.product_id === id ? { ...i, qty: Math.max(1, i.qty + delta) } : i));
   const removeFromCart = (id) => setCart(prev => prev.filter(i => i.product_id !== id));
 
+  const DEFAULT_TAX_RATE = Number(import.meta.env.VITE_DEFAULT_TAX_RATE ?? 0.05);
   const subtotal = cart.reduce((s, i) => s + i.unit_price * i.qty - i.discount, 0);
-  const tax      = subtotal * 0.05;
+  const tax      = subtotal * DEFAULT_TAX_RATE;
   const total    = subtotal + tax;
 
   // ── Checkout ────────────────────────────────────────────────────────────────

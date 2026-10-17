@@ -3,16 +3,18 @@ import numpy as np
 from sqlalchemy.orm import Session
 from backend.app.agents.base import BaseAgent, DecisionObject
 from backend.app.retrieval import get_postgres_context, get_vector_context
+from backend.app.config import settings
 
 class InventoryAgent(BaseAgent):
     def __init__(self):
         super().__init__(agent_id="inventory")
 
-    def run(self, tenant_id: str, product_id: str, run_date: date, db: Session) -> DecisionObject:
+    def run(self, tenant_id: str, product_id: str, run_date: date, db: Session, decision_type: str = "reorder_quantity") -> DecisionObject:
         context = get_postgres_context(tenant_id, self.agent_id, product_id, run_date, db)
         product = context["product"]
         inventory = context["inventory"]
         sales_records = context["sales"]
+        on_order = context.get("on_order", 0)
 
         unit_price = product.unit_price if product else 10.0
         unit_cost = product.unit_cost if product else 5.0
@@ -30,11 +32,13 @@ class InventoryAgent(BaseAgent):
         else:
             avg_daily_sales = 2.0
 
-        forecasted_demand = avg_daily_sales * lead_time
+        forecasted_demand = avg_daily_sales * (lead_time + settings.REORDER_REVIEW_PERIOD_DAYS)
 
-        # Calculate recommendation
-        if stock_level < reorder_point:
-            recommendation = float((reorder_point - stock_level) + forecasted_demand)
+        # Reorder-point rule on inventory position (on-hand + on-order), so stock
+        # already in transit is not ordered twice
+        position = stock_level + on_order
+        if position < reorder_point:
+            recommendation = float((reorder_point - position) + forecasted_demand)
             recommendation = max(0.0, round(recommendation, 2))
         else:
             recommendation = 0.0
@@ -77,7 +81,11 @@ class InventoryAgent(BaseAgent):
         return DecisionObject(
             agent_id=self.agent_id,
             recommendation=recommendation,
-            reason=f"Inventory Agent recommends ordering {recommendation} units because current stock ({stock_level}) is below reorder point ({reorder_point}) with {days_of_stock_remaining:.1f} days of stock remaining.",
+            reason=(
+                f"Inventory Agent recommends ordering {recommendation} units: inventory position "
+                f"{position} (on hand {stock_level} + on order {on_order}) vs reorder point {reorder_point}, "
+                f"{days_of_stock_remaining:.1f} days of stock on hand."
+            ),
             confidence=confidence,
             priority=priority,
             risk_score=risk_score,

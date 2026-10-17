@@ -7,9 +7,13 @@ from backend.app.agents.pricing import PricingAgent
 from backend.app.agents.marketing import MarketingAgent
 from backend.app.agents.procurement import ProcurementAgent
 from backend.app.agents.risk import RiskAgent
+# Phase 3 agents
+from backend.app.agents.hr import HRAgent
+from backend.app.agents.customer_management import CustomerManagementAgent
 
 __all__ = [
     "DecisionObject", "BaseAgent",
     "SalesAgent", "InventoryAgent", "FinanceAgent",
     "PricingAgent", "MarketingAgent", "ProcurementAgent", "RiskAgent",
+    "HRAgent", "CustomerManagementAgent",
 ]

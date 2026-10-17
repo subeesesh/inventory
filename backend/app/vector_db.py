@@ -16,7 +16,7 @@ def get_encoder():
                 def encode(self, text):
                     # Deterministic hash vector
                     np.random.seed(abs(hash(text)) % (2**32))
-                    v = np.random.uniform(-1, 1, 384)
+                    v = np.random.uniform(-1, 1, settings.EMBEDDING_VECTOR_SIZE)
                     return v / np.linalg.norm(v)
             _encoder = MockEncoder()
     return _encoder
@@ -92,8 +92,8 @@ class VectorDBClient:
                 self.qdrant_client = QdrantClient(host=settings.QDRANT_HOST, port=settings.QDRANT_PORT)
                 # Create collection if not exists
                 self.qdrant_client.recreate_collection(
-                    collection_name="sme_knowledge",
-                    vectors_config={"size": 384, "distance": "Cosine"}
+                    collection_name=settings.VECTOR_COLLECTION_NAME,
+                    vectors_config={"size": settings.EMBEDDING_VECTOR_SIZE, "distance": "Cosine"}
                 )
             except Exception as e:
                 print(f"Failed to initialize Qdrant, falling back to In-Memory Vector DB: {e}")
@@ -114,7 +114,7 @@ class VectorDBClient:
                 models = importlib.import_module("qdrant_client.models")
                 PointStruct = getattr(models, "PointStruct")
                 self.qdrant_client.upsert(
-                    collection_name="sme_knowledge",
+                    collection_name=settings.VECTOR_COLLECTION_NAME,
                     points=[PointStruct(id=doc_id, vector=vector, payload=payload)]
                 )
                 return doc_id
@@ -123,7 +123,7 @@ class VectorDBClient:
 
         # Fallback (ChromaDB or In-Memory)
         self.fallback_db.upsert(
-            collection_name="sme_knowledge",
+            collection_name=settings.VECTOR_COLLECTION_NAME,
             points=[{"id": doc_id, "vector": vector, "payload": payload}]
         )
         return doc_id
@@ -147,7 +147,7 @@ class VectorDBClient:
                         FieldCondition(key="type", match=MatchValue(value=doc_type))
                     )
                 hits = self.qdrant_client.search(
-                    collection_name="sme_knowledge",
+                    collection_name=settings.VECTOR_COLLECTION_NAME,
                     query_vector=query_vector,
                     query_filter=Filter(must=must_conditions),
                     limit=limit
@@ -166,7 +166,7 @@ class VectorDBClient:
             fallback_filter["must"].append({"key": "type", "match": {"value": doc_type}})
 
         return self.fallback_db.search(
-            collection_name="sme_knowledge",
+            collection_name=settings.VECTOR_COLLECTION_NAME,
             query_vector=query_vector,
             query_filter=fallback_filter,
             limit=limit

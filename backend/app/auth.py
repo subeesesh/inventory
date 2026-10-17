@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from backend.app.clock import utcnow
 from typing import Optional
 from fastapi import Header, HTTPException, Depends, Security, status
 from fastapi.security import OAuth2PasswordBearer
@@ -11,9 +12,9 @@ from backend.app.db import get_db, Tenant, User
 from backend.app.config import settings
 
 # JWT configuration
-SECRET_KEY = "supersecret_for_demo_only" # In production, pull from env/settings
+SECRET_KEY = settings.JWT_SECRET
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60
+ACCESS_TOKEN_EXPIRE_MINUTES = settings.ACCESS_TOKEN_EXPIRE_MINUTES
 
 import bcrypt
 
@@ -41,9 +42,9 @@ def get_password_hash(password: str) -> str:
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()
     if expires_delta:
-        expire = datetime.utcnow() + expires_delta
+        expire = utcnow() + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(minutes=15)
+        expire = utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
@@ -89,7 +90,7 @@ def get_current_tenant(
 
     # 3. Fallback to Demo Tenant for ease of local testing if no auth is provided at all
     if not api_key and not user:
-        demo_tenant = db.query(Tenant).filter_by(id="t1-uuid-demo-sme-tenant-12345").first()
+        demo_tenant = db.query(Tenant).filter_by(id=settings.DEMO_TENANT_ID).first()
         if demo_tenant:
             return demo_tenant
         

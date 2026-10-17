@@ -4,6 +4,10 @@ Marketing Agent  (decision_type: promotion_trigger)
 recommendation = suggested discount depth [0.0, 1.0] (fraction of unit_price)
                  to apply to slow-moving stock.
 
+Also participates in customer_retention_action, where the same turnover gap
+sets the retention engagement level [0, 1]: slow-moving products get a stronger
+re-engagement campaign aimed at existing customers.
+
 Algorithm:
   - Compute turnover_rate = avg daily qty_sold / stock_level.
   - Compare against a rolling median across all products to identify slow-movers.
@@ -41,6 +45,7 @@ class MarketingAgent(BaseAgent):
         product_id: str,
         run_date: date,
         db: Session,
+        decision_type: str = "promotion_trigger",
     ) -> DecisionObject:
 
         # ── 1. Retrieve product + inventory + 90-day sales ────────────────
@@ -137,6 +142,25 @@ class MarketingAgent(BaseAgent):
         )
         hist_sim = float(vector_hits[0]["score"]) if vector_hits else 0.5
         hist_sim = float(np.clip(hist_sim, 0.0, 1.0))
+
+        if decision_type == "customer_retention_action":
+            reason = (
+                f"Marketing Agent: turnover rate {turnover_rate:.4f} over {n_days} days of sales data. "
+                f"Recommending a customer re-engagement level of {discount_depth:.1%} "
+                f"(slower-moving stock warrants a stronger campaign)."
+            )
+            return DecisionObject(
+                agent_id=self.agent_id,
+                recommendation=discount_depth,
+                reason=reason,
+                confidence=confidence,
+                priority=priority,
+                risk_score=risk_score,
+                expected_cost=float(discount_depth * current_price * 10.0),
+                expected_benefit=float(expected_benefit),
+                required_resources={},
+                historical_similarity=hist_sim,
+            )
 
         reason = (
             f"Marketing Agent: product turnover rate = {turnover_rate:.4f} units/unit-stock/day "

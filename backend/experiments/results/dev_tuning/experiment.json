@@ -1,0 +1,65 @@
+{
+  "scenarios": {
+    "baseline": {
+      "name": "baseline",
+      "description": "Adequate purchase budget, moderate demand noise, reliable suppliers",
+      "budget_factor": 1.5,
+      "demand_cv": [
+        0.2,
+        0.4
+      ],
+      "shock_prob": 0.0,
+      "lead_time_sd_scale": 1.0,
+      "unreliable_frac": 0.0
+    },
+    "tight_budget": {
+      "name": "tight_budget",
+      "description": "Weekly purchase budget below expected cost of goods (cash-constrained SME)",
+      "budget_factor": 0.8,
+      "demand_cv": [
+        0.2,
+        0.4
+      ],
+      "shock_prob": 0.0,
+      "lead_time_sd_scale": 1.0,
+      "unreliable_frac": 0.0
+    },
+    "volatile": {
+      "name": "volatile",
+      "description": "High demand noise, demand surges/drops and unreliable suppliers",
+      "budget_factor": 1.5,
+      "demand_cv": [
+        0.4,
+        0.7
+      ],
+      "shock_prob": 0.5,
+      "lead_time_sd_scale": 2.0,
+      "unreliable_frac": 0.3
+    }
+  },
+  "seeds": [
+    1000,
+    1001,
+    1002,
+    1003
+  ],
+  "policies": [
+    "base_stock",
+    "amdie[t=1.0,sl=0.5]",
+    "amdie[t=1.0,sl=0.9]",
+    "amdie[t=0.2,sl=0.5]",
+    "amdie[t=0.2,sl=0.9]",
+    "amdie[t=0.05,sl=0.5]",
+    "amdie[t=0.05,sl=0.9]",
+    "amdie[t=0.02,sl=0.5]",
+    "amdie[t=0.02,sl=0.9]"
+  ],
+  "config": {
+    "n_products": 8,
+    "history_days": 120,
+    "horizon_days": 140,
+    "review_period": 7,
+    "holding_rate_annual": 0.25,
+    "order_fixed_cost": 15.0
+  }
+}

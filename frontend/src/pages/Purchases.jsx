@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Card, DataTable, StatusBadge, RoleGate, Modal } from '../components/ui';
+import { Card, DataTable, RoleGate, Modal } from '../components/ui';
 import { useToast } from '../components/ToastProvider';
 import api from '../api';
 

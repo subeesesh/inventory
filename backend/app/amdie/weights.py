@@ -1,10 +1,12 @@
 import numpy as np
+from backend.app.clock import utcnow
 from datetime import datetime
-from typing import Dict
+from typing import Dict, Optional
 from sqlalchemy.orm import Session
 from backend.app.db import AgentAccuracy, WeightCoefficients, HistoricalAccuracyLog, DecisionLog
 from backend.app.agents.base import DecisionObject
 from backend.app.vector_db import get_embedding
+from backend.app.config import settings
 
 # ── Domain descriptions for context-relevance embedding ───────────────────────
 # Phase 2: extended with descriptions for all registered agents.
@@ -19,6 +21,9 @@ AGENT_DOMAINS = {
     "pricing":      "demand elasticity, price sensitivity, unit price adjustment, margin erosion, log-log regression, revenue optimisation",
     "marketing":    "inventory turnover rate, slow-moving stock, discount depth, promotional trigger, margin impact, stock clearance",
     "risk":         "overall risk aggregation, supplier concentration, seasonality volatility, risk modifier, portfolio risk",
+    # Phase 3 agents
+    "hr":           "staffing hours, shift scheduling, workforce capacity, labor cost, staffing gap, peak demand coverage",
+    "customer_management": "customer retention, churn risk, loyalty incentives, shortage notification, customer relationships",
 }
 
 _domain_embeddings: dict | None = None
@@ -39,10 +44,33 @@ def compute_context_relevance(agent_id: str, query_embedding: list[float]) -> fl
     denom = np.linalg.norm(agent_emb) * np.linalg.norm(q_emb)
     return float(np.clip(dot / denom if denom > 0 else 0.0, 0.0, 1.0))
 
-def softmax(x: list[float]) -> list[float]:
-    arr = np.array(x, dtype=float)
+def softmax(x: list[float], temperature: float = 1.0) -> list[float]:
+    arr = np.array(x, dtype=float) / max(temperature, 1e-6)
     e = np.exp(arr - arr.max())
     return (e / e.sum()).tolist()
+
+
+def quantile_level_for(decision_type: str, override: Optional[float] = None) -> float:
+    if override is not None:
+        return float(override)
+    return settings.AMDIE_REORDER_SERVICE_LEVEL if decision_type == "reorder_quantity" else 0.5
+
+
+def recommendation_accuracy(rec: float, actual: float, level: float = 0.5) -> float:
+    """
+    Accuracy in [0, 1] of a recommendation against the realised outcome, from the
+    pinball (quantile) loss at `level`:
+        loss = level * under + (1 - level) * over
+    normalised by the worst-case weight so that level = 0.5 reduces to the
+    symmetric relative error 1 - |rec - actual| / max(|rec|, |actual|, 1).
+    Minimising expected pinball loss at level tau is the newsvendor condition, so
+    tau acts as the target service level for replenishment decisions.
+    """
+    under = max(actual - rec, 0.0)
+    over = max(rec - actual, 0.0)
+    loss = level * under + (1.0 - level) * over
+    denom = max(level, 1.0 - level) * max(abs(rec), abs(actual), 1.0)
+    return float(np.clip(1.0 - loss / denom, 0.0, 1.0))
 
 # ── Weight computation ──────────────────────────────────────────────────────────
 
@@ -52,6 +80,8 @@ def get_agent_weights(
     query_text: str,
     db: Session,
     decision_type: str = "reorder_quantity",   # Phase 2: scope all DB lookups by type
+    disabled_terms: frozenset = frozenset(),    # ablation: score terms forced to 0 (see amdie.options)
+    temperature: Optional[float] = None,        # softmax temperature; None -> settings
 ) -> tuple[Dict[str, float], Dict[str, Dict[str, float]]]:
     """
     Computes tenant-scoped adaptive weights for each agent, isolated per decision_type.
@@ -116,13 +146,14 @@ def get_agent_weights(
 
         # ── Score ─────────────────────────────────────────────────────────────
         w6 = getattr(coefs, "w6", 0.15)
+        on = lambda term: 0.0 if term in disabled_terms else 1.0  # noqa: E731
         score = (
-            coefs.w1 * reliability
-            + coefs.w2 * confidence
-            + coefs.w3 * historical_accuracy
-            + coefs.w4 * context_relevance
-            - coefs.w5 * risk_score
-            - w6       * divergence
+            on("reliability")         * coefs.w1 * reliability
+            + on("confidence")        * coefs.w2 * confidence
+            + on("historical_accuracy") * coefs.w3 * historical_accuracy
+            + on("context_relevance") * coefs.w4 * context_relevance
+            - on("risk")              * coefs.w5 * risk_score
+            - on("divergence")        * w6       * divergence
         )
         scores[agent_id] = float(score)
         components[agent_id] = {
@@ -137,7 +168,8 @@ def get_agent_weights(
 
     # 4. Softmax weights
     agent_ids = list(decisions.keys())
-    weights_list = softmax([scores[a] for a in agent_ids])
+    temp = settings.AMDIE_WEIGHT_TEMPERATURE if temperature is None else temperature
+    weights_list = softmax([scores[a] for a in agent_ids], temperature=temp)
     weights = {agent_ids[i]: weights_list[i] for i in range(len(agent_ids))}
     return weights, components
 
@@ -150,6 +182,7 @@ def update_reliability_and_logs(
     actual_outcome: float,
     db: Session,
     decision_type: str = "reorder_quantity",   # Phase 2: scoped by type
+    quantile_level: Optional[float] = None,    # None -> service level from settings
 ):
     """
     Called when a decision's actual outcome is POSTed.
@@ -166,11 +199,11 @@ def update_reliability_and_logs(
     dec_log.actual_outcome = actual_outcome
     agent_decisions = json.loads(dec_log.agent_decisions)
     alpha = 0.3   # EMA smoothing factor
+    level = quantile_level_for(decision_type, quantile_level)
 
     for agent_id, dec_raw in agent_decisions.items():
         rec = dec_raw["recommendation"]
-        denom = max(abs(rec), abs(actual_outcome), 1.0)
-        accuracy = float(np.clip(1.0 - abs(rec - actual_outcome) / denom, 0.0, 1.0))
+        accuracy = recommendation_accuracy(rec, actual_outcome, level)
 
         acc_rec = db.query(AgentAccuracy).filter_by(
             tenant_id=tenant_id, agent_id=agent_id, decision_type=decision_type
@@ -185,7 +218,7 @@ def update_reliability_and_logs(
         else:
             acc_rec.last_accuracy = accuracy
             acc_rec.reliability = alpha * accuracy + (1.0 - alpha) * acc_rec.reliability
-            acc_rec.updated_at = datetime.utcnow()
+            acc_rec.updated_at = utcnow()
 
         db.add(HistoricalAccuracyLog(
             tenant_id=tenant_id,
@@ -204,6 +237,7 @@ def check_and_trigger_retraining(
     tenant_id: str,
     db: Session,
     decision_type: str = "reorder_quantity",   # Phase 2: scoped by type
+    quantile_level: Optional[float] = None,
 ):
     """
     Refits w1..w6 via linear regression once >= 30 decisions with logged outcomes
@@ -239,6 +273,7 @@ def check_and_trigger_retraining(
     import json
     from sklearn.linear_model import LinearRegression
 
+    level = quantile_level_for(decision_type, quantile_level)
     X, y = [], []
     for dec in completed:
         actual      = dec.actual_outcome
@@ -249,8 +284,7 @@ def check_and_trigger_retraining(
             if agent_id not in agent_decs:
                 continue
             rec = agent_decs[agent_id]["recommendation"]
-            denom = max(abs(rec), abs(actual), 1.0)
-            accuracy = float(np.clip(1.0 - abs(rec - actual) / denom, 0.0, 1.0))
+            accuracy = recommendation_accuracy(rec, actual, level)
 
             X.append([
                 comps.get("reliability",         1.0),
@@ -270,7 +304,7 @@ def check_and_trigger_retraining(
         coefs.w4, coefs.w5           = float(w[3]), float(w[4])
         coefs.w6                     = float(w[5]) if len(w) > 5 else 0.15
         coefs.trained_on_n_decisions = len(completed)
-        coefs.updated_at = datetime.utcnow()
+        coefs.updated_at = utcnow()
         db.commit()
         print(
             f"[AMDIE] Retrained weights for tenant={tenant_id} decision_type={decision_type}: "

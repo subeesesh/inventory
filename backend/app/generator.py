@@ -1,4 +1,5 @@
 import random
+from backend.app.clock import utcnow
 from datetime import datetime, timedelta
 import math
 from sqlalchemy.orm import Session
@@ -6,6 +7,7 @@ from backend.app.db import (
     Tenant, Product, InventoryState, SalesRecord, FinanceLedger,
     AgentAccuracy, WeightCoefficients, HistoricalAccuracyLog, Supplier,
 )
+from backend.app.config import settings
 from backend.app.vector_db import vector_db
 from backend.app.decision_registry import all_decision_types
 
@@ -271,11 +273,11 @@ def seed_db_script():
     init_db()   # Creates tables + runs Phase 2 migration backfill
     db = SessionLocal()
     # Check if a tenant already exists
-    tenant = db.query(Tenant).filter_by(id="t1-uuid-demo-sme-tenant-12345").first()
+    tenant = db.query(Tenant).filter_by(id=settings.DEMO_TENANT_ID).first()
     if not tenant:
         # Create Demo Tenant
         tenant = Tenant(
-            id="t1-uuid-demo-sme-tenant-12345",
+            id=settings.DEMO_TENANT_ID,
             name="Demo SME",
             api_key_hash="demo_api_key_hash",
             business_goal="maximize_profit"
@@ -290,13 +292,13 @@ def seed_db_script():
         owner = User(
             tenant_id=tenant.id,
             email="owner@example.com",
-            password_hash=get_password_hash("password"),
+            password_hash=get_password_hash(settings.SEED_DEFAULT_PASSWORD),
             role="owner"
         )
         maint = User(
             tenant_id=tenant.id,
             email="maint@example.com",
-            password_hash=get_password_hash("password"),
+            password_hash=get_password_hash(settings.SEED_DEFAULT_PASSWORD),
             role="maintenance"
         )
         db.add(owner)
@@ -309,7 +311,7 @@ def seed_db_script():
     prod_count = db.query(Product).filter_by(tenant_id=tenant.id).count()
     if prod_count == 0:
         print("Generating synthetic data for the demo tenant...")
-        start_date = (datetime.utcnow() - timedelta(days=370)).date()
+        start_date = (utcnow() - timedelta(days=370)).date()
         generate_synthetic_data(db, tenant.id, start_date, days=370)
         print("Database seeded successfully with Tenant, Products, Sales, Supplier, Ledger and Vector Knowledge.")
     else:

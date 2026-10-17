@@ -1,0 +1,92 @@
+## Table 1. Profit relative to base-stock and fill rate (mean over seeds)
+
+| Method | baseline: Δ profit % [95% CI] | tight_budget: Δ profit % [95% CI] | volatile: Δ profit % [95% CI] | baseline: fill | tight_budget: fill | volatile: fill |
+|---|---|---|---|---|---|---|
+| Newsvendor order-up-to | +1.88 [+1.20, +2.57] | +0.42 [-0.04, +0.87] | +2.90 [+2.29, +3.51] | 0.970 | 0.735 | 0.928 |
+| Base-stock, 95% service | +0.00 [+0.00, +0.00] | +0.00 [+0.00, +0.00] | +0.00 [+0.00, +0.00] | 0.951 | 0.733 | 0.900 |
+| Procurement agent only | +2.12 [+1.25, +3.00] | +0.81 [+0.06, +1.56] | +4.67 [+3.69, +5.64] | 0.972 | 0.737 | 0.947 |
+| Finance agent only | -6.06 [-7.25, -4.86] | -0.29 [-1.23, +0.66] | -7.04 [-7.73, -6.36] | 0.894 | 0.729 | 0.836 |
+| Inventory agent only | -12.99 [-15.09, -10.89] | -5.53 [-7.57, -3.50] | -12.20 [-14.42, -9.99] | 0.827 | 0.699 | 0.792 |
+| Sales agent only | -12.52 [-14.42, -10.61] | -10.34 [-14.62, -6.05] | -11.82 [-13.49, -10.15] | 0.824 | 0.664 | 0.791 |
+| Agent mean | -5.53 [-6.52, -4.54] | -0.65 [-1.63, +0.32] | -3.47 [-4.16, -2.77] | 0.900 | 0.728 | 0.871 |
+| Agent median | -5.83 [-6.65, -5.00] | -1.13 [-2.07, -0.19] | -4.93 [-5.58, -4.28] | 0.896 | 0.725 | 0.857 |
+| AMDIE (full) | -2.48 [-3.53, -1.42] | -0.96 [-2.04, +0.12] | -0.47 [-1.59, +0.65] | 0.927 | 0.726 | 0.899 |
+| Perfect-foresight order-up-to (ref.) | -3.07 [-4.67, -1.47] | +0.05 [-1.04, +1.14] | -5.90 [-8.06, -3.75] | 0.924 | 0.731 | 0.848 |
+
+## Table 2-baseline. Detailed metrics, scenario 'baseline'
+
+| Method | Δ profit vs base-stock (%) | Fill rate | Stock-out days | Avg. inventory value | Budget-truncated orders | WAPE vs perfect foresight | Conflict rate |
+|---|---|---|---|---|---|---|---|
+| Newsvendor order-up-to | +1.88 | 0.970 | 0.036 | 21,265 | 0.000 | 0.685 | – |
+| Base-stock, 95% service | +0.00 | 0.951 | 0.058 | 18,470 | 0.000 | 0.497 | – |
+| Procurement agent only | +2.12 | 0.972 | 0.034 | 21,250 | 0.000 | 0.666 | – |
+| Finance agent only | -6.06 | 0.894 | 0.127 | 13,416 | 0.000 | 0.322 | – |
+| Inventory agent only | -12.99 | 0.827 | 0.188 | 23,006 | 0.086 | 0.703 | – |
+| Sales agent only | -12.52 | 0.824 | 0.205 | 16,161 | 0.020 | 0.472 | – |
+| Agent mean | -5.53 | 0.900 | 0.118 | 16,635 | 0.005 | 0.382 | – |
+| Agent median | -5.83 | 0.896 | 0.124 | 16,384 | 0.007 | 0.358 | – |
+| AMDIE (full) | -2.48 | 0.927 | 0.085 | 18,201 | 0.007 | 0.453 | 0.99 |
+| Perfect-foresight order-up-to (ref.) | -3.07 | 0.924 | 0.081 | 14,033 | 0.000 | 0.000 | – |
+| – tuning (T=1, symmetric scoring) | -5.26 | 0.903 | 0.113 | 15,652 | 0.003 | 0.346 | 0.99 |
+| – adaptive weights (equal) | -5.40 | 0.901 | 0.115 | 15,505 | 0.002 | 0.344 | 0.99 |
+| – LP fusion (weighted avg.) | -0.25 | 0.949 | 0.063 | 18,851 | 0.001 | 0.476 | 0.99 |
+| – outcome learning | -4.11 | 0.914 | 0.101 | 17,106 | 0.002 | 0.398 | 0.98 |
+| – divergence penalty | -0.59 | 0.947 | 0.060 | 19,569 | 0.002 | 0.549 | 0.99 |
+| – context relevance | -2.81 | 0.925 | 0.088 | 17,760 | 0.005 | 0.426 | 0.99 |
+| – agent hard caps | -2.48 | 0.927 | 0.085 | 18,201 | 0.007 | 0.453 | 0.99 |
+
+## Table 2-tight_budget. Detailed metrics, scenario 'tight_budget'
+
+| Method | Δ profit vs base-stock (%) | Fill rate | Stock-out days | Avg. inventory value | Budget-truncated orders | WAPE vs perfect foresight | Conflict rate |
+|---|---|---|---|---|---|---|---|
+| Newsvendor order-up-to | +0.42 | 0.735 | 0.308 | 15,501 | 0.356 | 0.781 | – |
+| Base-stock, 95% service | +0.00 | 0.733 | 0.314 | 13,826 | 0.338 | 0.679 | – |
+| Procurement agent only | +0.81 | 0.737 | 0.304 | 15,511 | 0.374 | 0.772 | – |
+| Finance agent only | -0.29 | 0.729 | 0.323 | 11,077 | 0.311 | 0.532 | – |
+| Inventory agent only | -5.53 | 0.699 | 0.320 | 18,605 | 0.535 | 0.715 | – |
+| Sales agent only | -10.34 | 0.664 | 0.367 | 12,321 | 0.236 | 0.628 | – |
+| Agent mean | -0.65 | 0.728 | 0.312 | 13,300 | 0.338 | 0.565 | – |
+| Agent median | -1.13 | 0.725 | 0.313 | 13,264 | 0.347 | 0.551 | – |
+| AMDIE (full) | -0.96 | 0.726 | 0.313 | 13,982 | 0.380 | 0.629 | 0.99 |
+| Perfect-foresight order-up-to (ref.) | +0.05 | 0.731 | 0.305 | 11,306 | 0.352 | 0.382 | – |
+| – tuning (T=1, symmetric scoring) | -0.41 | 0.729 | 0.308 | 13,113 | 0.349 | 0.550 | 0.98 |
+| – adaptive weights (equal) | -0.19 | 0.730 | 0.308 | 13,036 | 0.345 | 0.543 | 0.98 |
+| – LP fusion (weighted avg.) | -0.21 | 0.730 | 0.314 | 14,032 | 0.370 | 0.662 | 0.99 |
+| – outcome learning | -0.46 | 0.730 | 0.307 | 13,637 | 0.360 | 0.583 | 0.98 |
+| – divergence penalty | +0.01 | 0.730 | 0.309 | 14,516 | 0.376 | 0.690 | 0.99 |
+| – context relevance | -0.59 | 0.729 | 0.308 | 13,676 | 0.365 | 0.609 | 0.99 |
+| – agent hard caps | -0.96 | 0.726 | 0.313 | 13,982 | 0.380 | 0.629 | 0.99 |
+
+## Table 2-volatile. Detailed metrics, scenario 'volatile'
+
+| Method | Δ profit vs base-stock (%) | Fill rate | Stock-out days | Avg. inventory value | Budget-truncated orders | WAPE vs perfect foresight | Conflict rate |
+|---|---|---|---|---|---|---|---|
+| Newsvendor order-up-to | +2.90 | 0.928 | 0.063 | 28,385 | 0.003 | 1.037 | – |
+| Base-stock, 95% service | +0.00 | 0.900 | 0.091 | 23,498 | 0.002 | 0.775 | – |
+| Procurement agent only | +4.67 | 0.947 | 0.046 | 33,223 | 0.003 | 1.391 | – |
+| Finance agent only | -7.04 | 0.836 | 0.158 | 16,724 | 0.001 | 0.544 | – |
+| Inventory agent only | -12.20 | 0.792 | 0.195 | 27,248 | 0.127 | 0.785 | – |
+| Sales agent only | -11.82 | 0.791 | 0.210 | 21,883 | 0.029 | 0.696 | – |
+| Agent mean | -3.47 | 0.871 | 0.120 | 21,820 | 0.012 | 0.656 | – |
+| Agent median | -4.93 | 0.857 | 0.138 | 21,944 | 0.013 | 0.654 | – |
+| AMDIE (full) | -0.47 | 0.899 | 0.091 | 26,195 | 0.012 | 0.879 | 0.99 |
+| Perfect-foresight order-up-to (ref.) | -5.90 | 0.848 | 0.150 | 16,570 | 0.017 | 0.012 | – |
+| – tuning (T=1, symmetric scoring) | -5.32 | 0.855 | 0.138 | 21,386 | 0.010 | 0.638 | 0.99 |
+| – adaptive weights (equal) | -5.58 | 0.852 | 0.141 | 21,246 | 0.006 | 0.643 | 0.99 |
+| – LP fusion (weighted avg.) | +1.91 | 0.922 | 0.073 | 28,467 | 0.006 | 1.002 | 0.99 |
+| – outcome learning | -2.99 | 0.877 | 0.117 | 24,020 | 0.017 | 0.742 | 0.99 |
+| – divergence penalty | +0.93 | 0.912 | 0.077 | 28,437 | 0.013 | 1.026 | 0.99 |
+| – context relevance | -1.06 | 0.893 | 0.100 | 25,807 | 0.014 | 0.856 | 0.99 |
+| – agent hard caps | -0.47 | 0.899 | 0.091 | 26,195 | 0.012 | 0.879 | 0.99 |
+
+## Table 3. Ablation: change in profit when a component is removed (percentage points vs full AMDIE)
+
+| Variant | baseline: Δ vs full (pp) [95% CI] | tight_budget: Δ vs full (pp) [95% CI] | volatile: Δ vs full (pp) [95% CI] | baseline: p (Holm) | tight_budget: p (Holm) | volatile: p (Holm) |
+|---|---|---|---|---|---|---|
+| – tuning (T=1, symmetric scoring) | -2.78 [-3.89, -1.67] | +0.55 [-0.32, +1.41] | -4.85 [-6.07, -3.62] | 0.003 | 0.926 | 0.000 |
+| – adaptive weights (equal) | -2.92 [-4.11, -1.73] | +0.77 [-0.07, +1.61] | -5.10 [-6.32, -3.89] | 0.003 | 0.604 | 0.000 |
+| – LP fusion (weighted avg.) | +2.23 [+1.40, +3.06] | +0.75 [+0.10, +1.39] | +2.38 [+1.82, +2.93] | 0.002 | 0.309 | 0.000 |
+| – outcome learning | -1.64 [-2.31, -0.96] | +0.50 [-0.10, +1.09] | -2.52 [-3.70, -1.33] | 0.003 | 0.632 | 0.006 |
+| – divergence penalty | +1.89 [+0.96, +2.82] | +0.97 [+0.26, +1.69] | +1.40 [+0.47, +2.34] | 0.006 | 0.159 | 0.032 |
+| – context relevance | -0.34 [-0.84, +0.16] | +0.37 [-0.10, +0.84] | -0.58 [-1.23, +0.06] | 0.487 | 0.648 | 0.210 |
+| – agent hard caps | -0.00 [-0.00, -0.00] | -0.00 [-0.00, -0.00] | -0.00 [-0.00, -0.00] | 1.000 | 1.000 | 1.000 |
