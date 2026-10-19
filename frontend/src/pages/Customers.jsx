@@ -1,152 +1,134 @@
-import React, { useState, useEffect } from 'react';
-import { Card, DataTable, Modal } from '../components/ui';
-import { useToast } from '../components/ToastProvider';
-import api from '../api';
+import { useState } from 'react';
+import { Plus, Search, UserRound, Users, Wallet } from 'lucide-react';
+import api from '../core/api';
+import { useApi } from '../core/useApi';
+import { useSession } from '../core/session';
+import { date, dateTime, money, num } from '../core/format';
+import { Badge, Button, Card, Drawer, Empty, ErrorNote, Field, Input, Modal, PageHeader, Skeleton, StatCard, Table } from '../components/ui';
+import { useToast } from '../components/Toast';
 
-export const Customers = () => {
+const ANALYTICS_ROLES = ['owner', 'finance_officer'];
+const CREATE_ROLES = ['owner', 'cashier'];
+
+export default function Customers() {
+  const { role } = useSession();
   const { showToast } = useToast();
-  const [customers, setCustomers]       = useState([]);
-  const [loading, setLoading]           = useState(true);
-  const [search, setSearch]             = useState('');
-  const [showNew, setShowNew]           = useState(false);
-  const [form, setForm]                 = useState({ name: '', phone: '', email: '' });
-  const [nameErr, setNameErr]           = useState('');
-  const [submitting, setSubmitting]     = useState(false);
-  const [detailCustomer, setDetailCustomer] = useState(null);
-  const [custSales, setCustSales]       = useState([]);
-  const [salesLoading, setSalesLoading] = useState(false);
+  const analytics = ANALYTICS_ROLES.includes(role);
+  // Owners and finance see lifetime spend from the customers report; cashiers get the plain list
+  const list = useApi(analytics ? '/tenants/reports?type=customers' : '/tenants/customers');
+  const sales = useApi(analytics ? '/tenants/sales' : null, { initial: [] });
+  const customers = (analytics ? list.data?.data : list.data) || [];
 
-  const fetchCustomers = async () => {
+  const [q, setQ] = useState('');
+  const [form, setForm] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [selected, setSelected] = useState(null);
+
+  const rows = customers.filter(c => !q || `${c.name} ${c.phone || ''} ${c.email || ''}`.toLowerCase().includes(q.toLowerCase()));
+  const totalSpend = customers.reduce((s, c) => s + (c.lifetime_spend || 0), 0);
+  const history = selected ? sales.data.filter(s => s.customer_id === selected.id) : [];
+
+  const save = async () => {
+    if (!form.name.trim()) return;
+    setSaving(true);
     try {
-      const d = await api.get('/tenants/customers');
-      setCustomers(d || []);
-    } catch (e) { showToast(e.message, 'error'); }
-    finally { setLoading(false); }
-  };
-
-  useEffect(() => { fetchCustomers(); }, []);
-
-  const filtered = customers.filter(c => {
-    const q = search.toLowerCase();
-    return !search || c.name?.toLowerCase().includes(q) || c.phone?.includes(search);
-  });
-
-  const handleAdd = async () => {
-    if (!form.name.trim()) { setNameErr('Name is required'); return; }
-    setSubmitting(true);
-    try {
-      await api.post('/tenants/customers', { name: form.name, phone: form.phone || null, email: form.email || null });
+      await api.post('/tenants/customers', { name: form.name.trim(), phone: form.phone || null, email: form.email || null });
       showToast('Customer added', 'success');
-      setShowNew(false);
-      setForm({ name: '', phone: '', email: '' });
-      setNameErr('');
-      fetchCustomers();
-    } catch (e) { showToast(e.message, 'error'); }
-    finally { setSubmitting(false); }
-  };
-
-  const openDetail = async (c) => {
-    setDetailCustomer(c);
-    setSalesLoading(true);
-    try {
-      const sales = await api.get('/tenants/sales');
-      setCustSales((sales || []).filter(s => s.customer_id === c.id));
-    } catch (_) { setCustSales([]); }
-    finally { setSalesLoading(false); }
+      setForm(null);
+      list.reload();
+    } catch (e) { showToast(e.message, 'error'); } finally { setSaving(false); }
   };
 
   const columns = [
-    { header: 'Name', accessor: 'name' },
-    { header: 'Phone', render: r => r.phone || '—' },
-    { header: 'Email', render: r => r.email || '—' },
-    { header: 'Added', render: r => r.created_at ? new Date(r.created_at).toLocaleDateString() : '—' },
+    { header: 'Customer', render: c => (
+      <div className="flex items-center gap-3">
+        <span className="grid size-8 shrink-0 place-items-center rounded-full bg-primary-soft text-xs font-semibold text-primary uppercase">{c.name.slice(0, 2)}</span>
+        <span className="font-medium text-ink">{c.name}</span>
+      </div>
+    ) },
+    { header: 'Phone', render: c => c.phone || '—' },
+    { header: 'Email', render: c => c.email || '—' },
+    ...(analytics ? [
+      { header: 'Orders', align: 'right', render: c => num(c.transaction_count) },
+      { header: 'Lifetime spend', align: 'right', render: c => <span className="font-medium text-ink">{money(c.lifetime_spend)}</span> },
+      { header: 'Last purchase', render: c => <span className="text-xs">{date(c.last_purchase)}</span> },
+    ] : []),
   ];
-
-  const salesCols = [
-    { header: 'Date', render: r => r.created_at ? new Date(r.created_at).toLocaleDateString() : '—' },
-    { header: 'Total', render: r => `$${Number(r.total || 0).toFixed(2)}` },
-    { header: 'Payment', accessor: 'payment_method' },
-    { header: 'Items', render: r => r.items?.length ?? '—' },
-  ];
-
-  const inputStyle = { padding: '10px', borderRadius: '6px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.12)', color: '#fff', width: '100%', boxSizing: 'border-box' };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '16px' }}>
-        <h2 style={{ margin: 0 }}>Customers</h2>
-        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="🔍  Search by name or phone…"
-            style={{ padding: '10px 14px', borderRadius: '8px', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', color: '#fff', width: '240px' }} />
-          <button onClick={() => { setShowNew(true); setForm({ name: '', phone: '', email: '' }); setNameErr(''); }}
-            style={{ padding: '10px 20px', borderRadius: '8px', background: '#4ade80', color: '#0f172a', border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>
-            + New Customer
-          </button>
+    <>
+      <PageHeader
+        title="Customers"
+        description="Your customer list. Purchases made at the POS are linked to the customer attached to the sale."
+        actions={CREATE_ROLES.includes(role) && <Button icon={Plus} onClick={() => setForm({ name: '', phone: '', email: '' })}>Add customer</Button>}
+      />
+
+      {analytics && (
+        <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-3">
+          <StatCard label="Customers" value={num(customers.length)} icon={Users} tone="primary" loading={list.loading} />
+          <StatCard label="Lifetime spend" value={money(totalSpend)} icon={Wallet} tone="success" loading={list.loading} />
+          <StatCard label="Average per customer" value={money(customers.length ? totalSpend / customers.length : 0)} icon={UserRound} tone="violet" loading={list.loading} />
         </div>
-      </div>
-
-      <Card>
-        {loading ? (
-          <div style={{ textAlign: 'center', padding: '60px', color: '#64748b' }}>Loading customers…</div>
-        ) : filtered.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '60px', color: '#64748b' }}>
-            {customers.length === 0
-              ? <><p>No customers yet.</p><button onClick={() => setShowNew(true)} style={{ padding: '10px 20px', borderRadius: '8px', background: '#4ade80', color: '#0f172a', border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>Add your first customer →</button></>
-              : 'No customers match that search.'}
-          </div>
-        ) : (
-          <DataTable columns={columns} data={filtered} onRowClick={openDetail} />
-        )}
-      </Card>
-
-      {/* New Customer Modal */}
-      {showNew && (
-        <Modal title="New Customer" onClose={() => setShowNew(false)}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <label style={{ color: '#94a3b8', fontSize: '12px' }}>Name * {nameErr && <span style={{ color: '#f87171' }}>{nameErr}</span>}</label>
-              <input value={form.name} onChange={e => { setForm(f => ({ ...f, name: e.target.value })); setNameErr(''); }} style={{ ...inputStyle, borderColor: nameErr ? '#f87171' : 'rgba(255,255,255,0.12)' }} />
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <label style={{ color: '#94a3b8', fontSize: '12px' }}>Phone</label>
-              <input value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} style={inputStyle} />
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <label style={{ color: '#94a3b8', fontSize: '12px' }}>Email</label>
-              <input type="email" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} style={inputStyle} />
-            </div>
-            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '8px' }}>
-              <button onClick={() => setShowNew(false)} style={cancelBtn}>Cancel</button>
-              <button onClick={handleAdd} disabled={submitting} style={primaryBtn}>{submitting ? 'Saving…' : 'Add Customer'}</button>
-            </div>
-          </div>
-        </Modal>
       )}
 
-      {/* Customer Detail Modal */}
-      {detailCustomer && (
-        <Modal title={detailCustomer.name} onClose={() => { setDetailCustomer(null); setCustSales([]); }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', background: 'rgba(255,255,255,0.03)', borderRadius: '8px', padding: '16px' }}>
-              {[['Phone', detailCustomer.phone || '—'], ['Email', detailCustomer.email || '—'], ['Customer Since', detailCustomer.created_at ? new Date(detailCustomer.created_at).toLocaleDateString() : '—']].map(([l, v]) => (
-                <div key={l}>
-                  <div style={{ color: '#64748b', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{l}</div>
-                  <div style={{ color: '#e2e8f0', marginTop: '4px' }}>{v}</div>
+      <Card
+        padded={false}
+        title="Customer list"
+        actions={(
+          <div className="relative">
+            <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted" />
+            <Input value={q} onChange={e => setQ(e.target.value)} placeholder="Name, phone or email…" className="w-56 pl-9" />
+          </div>
+        )}
+      >
+        <ErrorNote className="m-4">{list.error}</ErrorNote>
+        {list.loading ? <div className="p-5"><Skeleton className="h-64" /></div>
+          : <Table columns={columns} rows={rows} onRowClick={analytics ? setSelected : undefined}
+              empty={<Empty icon={Users} title={customers.length ? 'No customers match' : 'No customers yet'}>Customers you add here or at the POS appear in this list.</Empty>} />}
+      </Card>
+
+      <Drawer open={Boolean(selected)} onClose={() => setSelected(null)} title={selected?.name} description={[selected?.phone, selected?.email].filter(Boolean).join(' · ') || null}>
+        {selected && (
+          <div className="space-y-5">
+            <div className="grid grid-cols-3 gap-3">
+              {[['Orders', num(selected.transaction_count)], ['Lifetime spend', money(selected.lifetime_spend)], ['Last purchase', date(selected.last_purchase)]].map(([l, v]) => (
+                <div key={l} className="rounded-xl bg-surface-2 p-3">
+                  <p className="text-xs text-muted">{l}</p>
+                  <p className="num mt-1 text-sm font-semibold text-ink">{v}</p>
                 </div>
               ))}
             </div>
-            <h4 style={{ margin: 0, color: '#94a3b8', fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Purchase History</h4>
-            {salesLoading
-              ? <div style={{ color: '#64748b', textAlign: 'center', padding: '20px' }}>Loading…</div>
-              : custSales.length === 0
-                ? <p style={{ color: '#64748b', textAlign: 'center' }}>No purchases on record.</p>
-                : <DataTable columns={salesCols} data={custSales} />}
+            <div>
+              <h3 className="mb-2 text-sm font-semibold text-ink">Purchase history</h3>
+              {sales.loading ? <Skeleton className="h-32" />
+                : history.length === 0 ? <Empty title="No purchases on record" />
+                : (
+                  <ul className="divide-y divide-line rounded-xl border border-line">
+                    {history.map(s => (
+                      <li key={s.id} className="flex items-center justify-between gap-3 px-4 py-3 text-sm">
+                        <span className="text-ink-2">{dateTime(s.created_at)}</span>
+                        <Badge>{s.payment_method}</Badge>
+                        <span className="num font-medium text-ink">{money(s.total)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+            </div>
+          </div>
+        )}
+      </Drawer>
+
+      {form && (
+        <Modal size="sm" title="Add customer" onClose={() => setForm(null)}
+          footer={<><Button variant="secondary" onClick={() => setForm(null)}>Cancel</Button><Button onClick={save} loading={saving} disabled={!form.name.trim()}>Save customer</Button></>}
+        >
+          <div className="space-y-4">
+            <Field label="Name"><Input autoFocus value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} /></Field>
+            <Field label="Phone"><Input value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} /></Field>
+            <Field label="Email"><Input type="email" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} /></Field>
           </div>
         </Modal>
       )}
-    </div>
+    </>
   );
-};
-
-const cancelBtn  = { padding: '10px 18px', borderRadius: '7px', background: 'rgba(255,255,255,0.06)', color: '#94a3b8', border: '1px solid rgba(255,255,255,0.1)', cursor: 'pointer' };
-const primaryBtn = { padding: '10px 22px', borderRadius: '7px', background: '#4ade80', color: '#0f172a', border: 'none', fontWeight: 'bold', cursor: 'pointer' };
+}

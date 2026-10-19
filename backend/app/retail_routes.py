@@ -407,6 +407,49 @@ def receive_po(
     db.commit()
     return {"status": "success"}
 
+# ── Sales history (daily demand from the SalesRecord history) ────────────────
+
+@router.get("/tenants/sales-history")
+def get_sales_history(
+    days: int = 90,
+    product_id: Optional[str] = None,
+    tenant: Tenant = Depends(get_current_tenant),
+    db: Session = Depends(get_db),
+    _: bool = Depends(require_role(["owner", "inventory_manager", "procurement_officer", "finance_officer"]))
+):
+    """Daily units and revenue for the `days` days ending at the latest recorded sale.
+
+    The window is anchored on the last record rather than today so a dataset that
+    stops short of today still charts; `as_of` tells the client where it ends.
+    """
+    days = max(1, min(days, 365))
+    base = db.query(SalesRecord).filter(SalesRecord.tenant_id == tenant.id)
+    if product_id:
+        base = base.filter(SalesRecord.product_id == product_id)
+    as_of = base.with_entities(func.max(SalesRecord.date)).scalar()
+    if as_of is None:
+        return {"as_of": None, "days": days, "data": []}
+    start = as_of - timedelta(days=days - 1)
+    rows = (
+        base.filter(SalesRecord.date >= start)
+        .with_entities(
+            SalesRecord.date,
+            func.sum(SalesRecord.qty_sold),
+            func.sum(SalesRecord.qty_sold * SalesRecord.price),
+        )
+        .group_by(SalesRecord.date)
+        .order_by(SalesRecord.date)
+        .all()
+    )
+    by_day = {d: (int(u or 0), round(float(r or 0), 2)) for d, u, r in rows}
+    # Days with no sales are real zeros, not gaps
+    data = []
+    for i in range(days):
+        d = start + timedelta(days=i)
+        units, revenue = by_day.get(d, (0, 0.0))
+        data.append({"date": d.isoformat(), "units": units, "revenue": revenue})
+    return {"as_of": as_of.isoformat(), "days": days, "data": data}
+
 # ── Reports ───────────────────────────────────────────────────────────────────
 
 # Per-type role whitelist (enforced in-handler after the broad role guard)
