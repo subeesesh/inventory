@@ -1,232 +1,213 @@
-import React, { useState, useEffect } from 'react';
-import { Card, DataTable, StatusBadge, RoleGate, Modal } from '../components/ui';
-import { useToast } from '../components/ToastProvider';
-import api from '../api';
+import { useMemo, useState } from 'react';
+import { Boxes, PackageCheck, PackageX, Pencil, Plus, Power, Search, TriangleAlert } from 'lucide-react';
+import api from '../core/api';
+import { useApi } from '../core/useApi';
+import { useSession } from '../core/session';
+import { money, num, pct } from '../core/format';
+import { Badge, Button, Card, Empty, ErrorNote, Field, Input, Modal, PageHeader, Segmented, Skeleton, StatCard, Table } from '../components/ui';
+import { useToast } from '../components/Toast';
 
-const EMPTY_FORM = { id: '', name: '', category: '', sku: '', barcode: '', unit_price: '', unit_cost: '', min_stock: '', max_stock: '' };
+const EDIT_ROLES = ['owner', 'inventory_manager'];
+const EMPTY = { id: '', name: '', category: '', sku: '', barcode: '', unit_price: '', unit_cost: '', min_stock: '', max_stock: '' };
 
-export const Inventory = ({ role }) => {
+function status(p) {
+  if (!p.is_active) return { tone: 'neutral', label: 'Inactive', key: 'inactive' };
+  if (p.stock_level <= 0) return { tone: 'danger', label: 'Out of stock', key: 'out' };
+  if (p.stock_level <= p.reorder_point) return { tone: 'warning', label: 'Reorder', key: 'low' };
+  return { tone: 'success', label: 'In stock', key: 'ok' };
+}
+
+function ProductForm({ form, setForm, errors, isEdit }) {
+  const f = (key, label, type = 'text', hint) => (
+    <Field label={label} error={errors[key]} hint={hint}>
+      <Input type={type} step={type === 'number' ? 'any' : undefined} value={form[key]} invalid={Boolean(errors[key])}
+        onChange={e => setForm(v => ({ ...v, [key]: e.target.value }))} />
+    </Field>
+  );
+  return (
+    <div className="grid gap-4 sm:grid-cols-2">
+      {!isEdit && f('id', 'Product ID', 'text', 'A unique code, e.g. PROD-021')}
+      {f('name', 'Name')}
+      {f('category', 'Category')}
+      {f('sku', 'SKU')}
+      {f('barcode', 'Barcode')}
+      {f('unit_price', 'Selling price', 'number')}
+      {f('unit_cost', 'Unit cost', 'number')}
+      {f('min_stock', 'Minimum stock', 'number')}
+      {f('max_stock', 'Maximum stock', 'number')}
+    </div>
+  );
+}
+
+export default function Inventory() {
+  const { role } = useSession();
   const { showToast } = useToast();
-  const [products, setProducts]   = useState([]);
-  const [loading, setLoading]     = useState(true);
-  const [search, setSearch]       = useState('');
-  const [showAdd, setShowAdd]     = useState(false);
-  const [editProd, setEditProd]   = useState(null);   // product being edited
-  const [form, setForm]           = useState(EMPTY_FORM);
-  const [formErrors, setFormErrors] = useState({});
-  const [submitting, setSubmitting] = useState(false);
-  const [confirmDeactivate, setConfirmDeactivate] = useState(null);  // product id pending confirm
+  const { data, error, loading, reload } = useApi('/tenants/products', { initial: [] });
+  const canEdit = EDIT_ROLES.includes(role);
+  const [q, setQ] = useState('');
+  const [view, setView] = useState('all');
+  const [editing, setEditing] = useState(null); // null | 'new' | product
+  const [form, setForm] = useState(EMPTY);
+  const [errors, setErrors] = useState({});
+  const [saving, setSaving] = useState(false);
+  const [confirm, setConfirm] = useState(null);
 
-  const fetchProducts = async () => {
+  const counts = useMemo(() => {
+    const c = { ok: 0, low: 0, out: 0, inactive: 0 };
+    data.forEach(p => { c[status(p).key] += 1; });
+    return c;
+  }, [data]);
+  const stockValue = data.filter(p => p.is_active).reduce((s, p) => s + (p.unit_cost || 0) * (p.stock_level || 0), 0);
+
+  const rows = data.filter(p => {
+    const s = status(p).key;
+    if (view === 'attention' && !(s === 'low' || s === 'out')) return false;
+    if (view === 'inactive' && s !== 'inactive') return false;
+    if (view === 'all' && s === 'inactive') return false;
+    return !q || `${p.name} ${p.category} ${p.sku || ''} ${p.id}`.toLowerCase().includes(q.toLowerCase());
+  });
+
+  const open = (p) => {
+    setErrors({});
+    if (p === 'new') { setForm(EMPTY); setEditing('new'); return; }
+    setForm({
+      id: p.id, name: p.name, category: p.category, sku: p.sku || '', barcode: p.barcode || '',
+      unit_price: String(p.unit_price ?? ''), unit_cost: String(p.unit_cost ?? ''),
+      min_stock: String(p.min_stock ?? ''), max_stock: String(p.max_stock ?? ''),
+    });
+    setEditing(p);
+  };
+
+  const save = async () => {
+    const isNew = editing === 'new';
+    const errs = {};
+    if (isNew && !form.id.trim()) errs.id = 'required';
+    if (!form.name.trim()) errs.name = 'required';
+    if (!form.category.trim()) errs.category = 'required';
+    if (form.unit_price === '' || Number(form.unit_price) < 0) errs.unit_price = 'required';
+    setErrors(errs);
+    if (Object.keys(errs).length) return;
+
+    const body = {
+      name: form.name.trim(), category: form.category.trim(),
+      sku: form.sku || null, barcode: form.barcode || null,
+      unit_price: parseFloat(form.unit_price),
+      unit_cost: parseFloat(form.unit_cost) || 0,
+      min_stock: parseInt(form.min_stock, 10) || 0,
+      max_stock: parseInt(form.max_stock, 10) || 1000,
+    };
+    setSaving(true);
     try {
-      const d = await api.get('/tenants/products');
-      setProducts(d || []);
+      if (isNew) await api.post('/tenants/products', { id: form.id.trim(), ...body });
+      else await api.put(`/tenants/products/${editing.id}`, body);
+      showToast(isNew ? 'Product added' : 'Product updated', 'success');
+      setEditing(null);
+      reload();
     } catch (e) {
       showToast(e.message, 'error');
     } finally {
-      setLoading(false);
+      setSaving(false);
     }
   };
 
-  useEffect(() => { fetchProducts(); }, []);
-
-  const filtered = products.filter(p => {
-    if (!search) return true;
-    const q = search.toLowerCase();
-    return p.name?.toLowerCase().includes(q) || p.sku?.toLowerCase().includes(q) || p.category?.toLowerCase().includes(q);
-  });
-
-  // ── Validation ──────────────────────────────────────────────────────────────
-  const validate = (f, isEdit) => {
-    const errs = {};
-    if (!isEdit && !f.id.trim()) errs.id = 'Required';
-    if (!f.name.trim())         errs.name = 'Required';
-    if (!f.category.trim())     errs.category = 'Required';
-    if (!f.unit_price)          errs.unit_price = 'Required';
-    return errs;
-  };
-
-  // ── Add ─────────────────────────────────────────────────────────────────────
-  const openAdd = () => { setForm(EMPTY_FORM); setFormErrors({}); setShowAdd(true); };
-
-  const handleAdd = async () => {
-    const errs = validate(form, false);
-    if (Object.keys(errs).length) { setFormErrors(errs); return; }
-    setSubmitting(true);
+  const toggleActive = async (p) => {
     try {
-      await api.post('/tenants/products', {
-        id: form.id, name: form.name, category: form.category,
-        sku: form.sku || null, barcode: form.barcode || null,
-        unit_price: parseFloat(form.unit_price),
-        unit_cost: parseFloat(form.unit_cost) || 0,
-        min_stock: parseInt(form.min_stock) || 0,
-        max_stock: parseInt(form.max_stock) || null,
-      });
-      showToast('Product added', 'success');
-      setShowAdd(false);
-      fetchProducts();
-    } catch (e) { showToast(e.message, 'error'); }
-    finally { setSubmitting(false); }
+      if (p.is_active) await api.del(`/tenants/products/${p.id}`);
+      else await api.put(`/tenants/products/${p.id}`, { is_active: true });
+      showToast(p.is_active ? 'Product deactivated' : 'Product reactivated', 'success');
+      setConfirm(null);
+      reload();
+    } catch (e) {
+      showToast(e.message, 'error');
+    }
   };
-
-  // ── Edit ────────────────────────────────────────────────────────────────────
-  const openEdit = (p) => {
-    setForm({ id: p.id, name: p.name, category: p.category, sku: p.sku || '', barcode: p.barcode || '', unit_price: String(p.unit_price || ''), unit_cost: String(p.unit_cost || ''), min_stock: String(p.min_stock || ''), max_stock: String(p.max_stock || '') });
-    setFormErrors({});
-    setEditProd(p);
-  };
-
-  const handleEdit = async () => {
-    const errs = validate(form, true);
-    if (Object.keys(errs).length) { setFormErrors(errs); return; }
-    setSubmitting(true);
-    try {
-      await api.put(`/tenants/products/${editProd.id}`, {
-        name: form.name, category: form.category,
-        sku: form.sku || null, barcode: form.barcode || null,
-        unit_price: parseFloat(form.unit_price),
-        unit_cost: parseFloat(form.unit_cost) || 0,
-        min_stock: parseInt(form.min_stock) || 0,
-        max_stock: parseInt(form.max_stock) || null,
-      });
-      showToast('Product updated', 'success');
-      setEditProd(null);
-      fetchProducts();
-    } catch (e) { showToast(e.message, 'error'); }
-    finally { setSubmitting(false); }
-  };
-
-  // ── Deactivate ───────────────────────────────────────────────────────────────
-  const handleDeactivate = async (id) => {
-    try {
-      await api.del(`/tenants/products/${id}`);
-      showToast('Product deactivated', 'info');
-      setConfirmDeactivate(null);
-      fetchProducts();
-    } catch (e) { showToast(e.message, 'error'); }
-  };
-
-  // ── Form field helper ───────────────────────────────────────────────────────
-  const field = (key, label, type = 'text') => (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-      <label style={{ color: '#94a3b8', fontSize: '12px' }}>{label}{formErrors[key] && <span style={{ color: '#f87171', marginLeft: '6px' }}>{formErrors[key]}</span>}</label>
-      <input
-        type={type} value={form[key]}
-        onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
-        style={{ padding: '10px', borderRadius: '6px', background: 'rgba(255,255,255,0.05)', border: `1px solid ${formErrors[key] ? '#f87171' : 'rgba(255,255,255,0.12)'}`, color: '#fff' }}
-      />
-    </div>
-  );
 
   const columns = [
-    { header: 'SKU',      render: r => <span style={{ fontFamily: 'monospace', fontSize: '12px', color: '#94a3b8' }}>{r.sku || '—'}</span> },
-    { header: 'Name',     accessor: 'name' },
+    { header: 'Product', render: p => (
+      <div className="min-w-0">
+        <p className="truncate font-medium text-ink">{p.name}</p>
+        <p className="font-mono text-xs text-muted">{p.sku || p.id}</p>
+      </div>
+    ) },
     { header: 'Category', accessor: 'category' },
-    { header: 'Price',    render: r => `$${Number(r.unit_price || 0).toFixed(2)}` },
-    { header: 'Cost',     render: r => `$${Number(r.unit_cost || 0).toFixed(2)}` },
-    {
-      header: 'Stock', render: r => {
-        const isLow = r.min_stock != null && r.stock_level <= r.min_stock;
-        return (
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-            <span style={{ color: isLow ? '#f87171' : '#e2e8f0' }}>{r.stock_level ?? 0}</span>
-            {isLow && <span style={{ background: 'rgba(248,113,113,0.2)', color: '#f87171', fontSize: '10px', fontWeight: 'bold', padding: '2px 6px', borderRadius: '10px' }}>LOW</span>}
-          </div>
-        );
-      }
-    },
-    { header: 'Status', render: r => <StatusBadge status={r.is_active !== false ? 'active' : 'inactive'} /> },
-    {
-      header: 'Actions', render: r => (
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-          <button onClick={() => openEdit(r)} style={actionBtn}>Edit</button>
-          <RoleGate allowedRoles={['owner', 'inventory_manager']} currentRole={role}>
-            {confirmDeactivate === r.id ? (
-              <>
-                <button onClick={() => handleDeactivate(r.id)} style={{ ...actionBtn, color: '#f87171', borderColor: '#f87171' }}>Yes</button>
-                <button onClick={() => setConfirmDeactivate(null)} style={actionBtn}>Cancel</button>
-              </>
-            ) : (
-              r.is_active !== false && <button onClick={() => setConfirmDeactivate(r.id)} style={{ ...actionBtn, color: '#fbbf24', borderColor: '#fbbf24' }}>Deactivate</button>
-            )}
-          </RoleGate>
-        </div>
-      )
-    },
+    { header: 'Price', align: 'right', render: p => money(p.unit_price) },
+    { header: 'Cost', align: 'right', render: p => money(p.unit_cost) },
+    { header: 'Margin', align: 'right', render: p => p.unit_price ? pct((p.unit_price - (p.unit_cost || 0)) / p.unit_price) : '—' },
+    { header: 'Stock', align: 'right', render: p => <span className="font-medium text-ink">{num(p.stock_level)}</span> },
+    { header: 'Reorder at', align: 'right', render: p => num(p.reorder_point) },
+    { header: 'Status', render: p => { const s = status(p); return <Badge tone={s.tone} dot>{s.label}</Badge>; } },
+    ...(canEdit ? [{ header: '', className: 'w-24', render: p => (
+      <div className="flex justify-end gap-1" onClick={e => e.stopPropagation()}>
+        <Button size="icon" variant="ghost" onClick={() => open(p)} aria-label={`Edit ${p.name}`} title="Edit"><Pencil className="size-4" /></Button>
+        <Button size="icon" variant={p.is_active ? 'danger-ghost' : 'ghost'} onClick={() => setConfirm(p)} aria-label={p.is_active ? 'Deactivate' : 'Reactivate'} title={p.is_active ? 'Deactivate' : 'Reactivate'}><Power className="size-4" /></Button>
+      </div>
+    ) }] : []),
   ];
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-      {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '16px' }}>
-        <h2 style={{ margin: 0 }}>Inventory &amp; Products</h2>
-        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="🔍  Filter by name, SKU, category…"
-            style={{ padding: '10px 14px', borderRadius: '8px', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', color: '#fff', width: '260px' }} />
-          <RoleGate allowedRoles={['owner', 'inventory_manager']} currentRole={role}>
-            <button onClick={openAdd} style={{ padding: '10px 20px', borderRadius: '8px', background: '#4ade80', color: '#0f172a', border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>+ Add Product</button>
-          </RoleGate>
-        </div>
+    <>
+      <PageHeader
+        title="Inventory"
+        description="Products, stock on hand and reorder points. Reorder points come from the inventory agent and drive monitoring alerts."
+        actions={canEdit && <Button icon={Plus} onClick={() => open('new')}>Add product</Button>}
+      />
+
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <StatCard label="Active products" value={num(data.length - counts.inactive)} icon={Boxes} tone="primary" loading={loading} />
+        <StatCard label="In stock" value={num(counts.ok)} icon={PackageCheck} tone="success" loading={loading} />
+        <StatCard label="Need reorder" value={num(counts.low + counts.out)} hint={`${counts.out} out of stock`} icon={TriangleAlert} tone={counts.low + counts.out ? 'warning' : 'success'} loading={loading} />
+        <StatCard label="Stock value at cost" value={money(stockValue)} icon={PackageX} tone="info" loading={loading} />
       </div>
 
-      <Card>
-        {loading ? (
-          <div style={{ textAlign: 'center', padding: '60px', color: '#64748b' }}>Loading inventory…</div>
-        ) : filtered.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '60px', color: '#64748b' }}>
-            {products.length === 0
-              ? <><p>No products yet.</p><RoleGate allowedRoles={['owner','inventory_manager']} currentRole={role}><button onClick={openAdd} style={{ padding: '10px 20px', borderRadius: '8px', background: '#4ade80', color: '#0f172a', border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>Add your first product →</button></RoleGate></>
-              : 'No results for that search.'}
-          </div>
-        ) : (
-          <DataTable columns={columns} data={filtered} />
+      <Card
+        className="mt-6"
+        padded={false}
+        title="Products"
+        actions={(
+          <>
+            <div className="relative hidden sm:block">
+              <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted" />
+              <Input value={q} onChange={e => setQ(e.target.value)} placeholder="Search…" className="w-52 pl-9" />
+            </div>
+            <Segmented value={view} onChange={setView} options={[
+              { value: 'all', label: 'Active' },
+              { value: 'attention', label: 'Needs attention' },
+              { value: 'inactive', label: 'Inactive' },
+            ]} />
+          </>
         )}
+      >
+        <ErrorNote className="m-4">{error}</ErrorNote>
+        {loading ? <div className="p-5"><Skeleton className="h-80" /></div>
+          : <Table columns={columns} rows={rows} onRowClick={canEdit ? open : undefined}
+              empty={<Empty icon={Boxes} title={data.length ? 'No products match' : 'No products yet'} action={canEdit && !data.length && <Button icon={Plus} onClick={() => open('new')}>Add your first product</Button>} />} />}
       </Card>
 
-      {/* Add Modal */}
-      {showAdd && (
-        <Modal title="Add Product" onClose={() => setShowAdd(false)}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
-            {field('id', 'Product ID *')}
-            {field('name', 'Name *')}
-            {field('category', 'Category *')}
-            {field('sku', 'SKU')}
-            {field('barcode', 'Barcode')}
-            {field('unit_price', 'Unit Price *', 'number')}
-            {field('unit_cost', 'Unit Cost', 'number')}
-            {field('min_stock', 'Min Stock', 'number')}
-            {field('max_stock', 'Max Stock', 'number')}
-          </div>
-          <div style={{ display: 'flex', gap: '10px', marginTop: '20px', justifyContent: 'flex-end' }}>
-            <button onClick={() => setShowAdd(false)} style={cancelBtn}>Cancel</button>
-            <button onClick={handleAdd} disabled={submitting} style={submitBtn}>{submitting ? 'Saving…' : 'Add Product'}</button>
-          </div>
+      {editing && (
+        <Modal
+          size="lg"
+          title={editing === 'new' ? 'Add product' : `Edit ${editing.name}`}
+          onClose={() => setEditing(null)}
+          footer={<><Button variant="secondary" onClick={() => setEditing(null)}>Cancel</Button><Button onClick={save} loading={saving}>{editing === 'new' ? 'Add product' : 'Save changes'}</Button></>}
+        >
+          <ProductForm form={form} setForm={setForm} errors={errors} isEdit={editing !== 'new'} />
         </Modal>
       )}
 
-      {/* Edit Modal */}
-      {editProd && (
-        <Modal title={`Edit: ${editProd.name}`} onClose={() => setEditProd(null)}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
-            {field('name', 'Name *')}
-            {field('category', 'Category *')}
-            {field('sku', 'SKU')}
-            {field('barcode', 'Barcode')}
-            {field('unit_price', 'Unit Price *', 'number')}
-            {field('unit_cost', 'Unit Cost', 'number')}
-            {field('min_stock', 'Min Stock', 'number')}
-            {field('max_stock', 'Max Stock', 'number')}
-          </div>
-          <div style={{ display: 'flex', gap: '10px', marginTop: '20px', justifyContent: 'flex-end' }}>
-            <button onClick={() => setEditProd(null)} style={cancelBtn}>Cancel</button>
-            <button onClick={handleEdit} disabled={submitting} style={submitBtn}>{submitting ? 'Saving…' : 'Save Changes'}</button>
-          </div>
+      {confirm && (
+        <Modal
+          size="sm"
+          title={confirm.is_active ? 'Deactivate product?' : 'Reactivate product?'}
+          onClose={() => setConfirm(null)}
+          footer={<><Button variant="secondary" onClick={() => setConfirm(null)}>Cancel</Button><Button variant={confirm.is_active ? 'danger' : 'primary'} onClick={() => toggleActive(confirm)}>{confirm.is_active ? 'Deactivate' : 'Reactivate'}</Button></>}
+        >
+          <p className="text-sm text-ink-2">
+            {confirm.is_active
+              ? <><strong className="text-ink">{confirm.name}</strong> will be hidden from the POS. Its history is kept and you can reactivate it later.</>
+              : <><strong className="text-ink">{confirm.name}</strong> will be available for sale again.</>}
+          </p>
         </Modal>
       )}
-    </div>
+    </>
   );
-};
-
-const actionBtn = { padding: '5px 12px', borderRadius: '5px', background: 'transparent', border: '1px solid rgba(255,255,255,0.15)', color: '#94a3b8', cursor: 'pointer', fontSize: '12px' };
-const cancelBtn = { padding: '10px 20px', borderRadius: '7px', background: 'rgba(255,255,255,0.06)', color: '#94a3b8', border: '1px solid rgba(255,255,255,0.1)', cursor: 'pointer' };
-const submitBtn = { padding: '10px 24px', borderRadius: '7px', background: '#4ade80', color: '#0f172a', border: 'none', fontWeight: 'bold', cursor: 'pointer' };
+}

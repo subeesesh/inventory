@@ -1,96 +1,79 @@
-import React, { useState } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import Login from './Login';
-import { Layout } from './components/Layout';
-import { Dashboard, POS, Inventory, Purchases, Customers, AiAssistant } from './pages';
-import { ToastProvider } from './components/ToastProvider';
-import './App.css';
-import './index.css';
+import { lazy, Suspense } from 'react';
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { ShieldOff } from 'lucide-react';
+import { SessionProvider, ThemeProvider, useSession } from './core/session';
+import { can } from './core/constants';
+import { ToastProvider } from './components/Toast';
+import { AppShell, firstAllowedPath } from './components/AppShell';
+import { Empty, Spinner } from './components/ui';
+import Login from './pages/Login';
 
-function App() {
-  const [token, setToken] = useState(localStorage.getItem('token'));
-  const [role, setRole] = useState(localStorage.getItem('role'));
+const Dashboard = lazy(() => import('./pages/Dashboard'));
+const Twin = lazy(() => import('./pages/Twin'));
+const Decisions = lazy(() => import('./pages/Decisions'));
+const Simulator = lazy(() => import('./pages/Simulator'));
+const Copilot = lazy(() => import('./pages/Copilot'));
+const Monitoring = lazy(() => import('./pages/Monitoring'));
+const POS = lazy(() => import('./pages/POS'));
+const Inventory = lazy(() => import('./pages/Inventory'));
+const Purchases = lazy(() => import('./pages/Purchases'));
+const Customers = lazy(() => import('./pages/Customers'));
+const Compliance = lazy(() => import('./pages/Compliance'));
+const Settings = lazy(() => import('./pages/Settings'));
 
-  const handleLogin = (newToken, newRole) => {
-    localStorage.setItem('token', newToken);
-    localStorage.setItem('role', newRole);
-    setToken(newToken);
-    setRole(newRole);
-  };
+const PAGES = [
+  ['dashboard', Dashboard], ['twin', Twin], ['decisions', Decisions], ['simulator', Simulator],
+  ['copilot', Copilot], ['monitoring', Monitoring], ['pos', POS], ['inventory', Inventory],
+  ['purchases', Purchases], ['customers', Customers], ['compliance', Compliance], ['settings', Settings],
+];
 
-  const handleLogout = () => {
-    localStorage.removeItem('token');
-    localStorage.removeItem('role');
-    setToken(null);
-    setRole(null);
-  };
+function Guard({ area, children }) {
+  const { role } = useSession();
+  if (!can(role, area)) {
+    return <Empty icon={ShieldOff} title="Not available for your role">Ask the store owner if you need access to this area.</Empty>;
+  }
+  return children;
+}
 
-  const ProtectedRoute = ({ children, allowedRoles }) => {
-    if (!token) return <Navigate to="/login" replace />;
-    if (allowedRoles && !allowedRoles.includes(role)) {
-      return (
-        <div style={{ padding: '50px', textAlign: 'center', color: '#f87171' }}>
-          <h2>403 - Forbidden</h2>
-          <p>Your role ({role}) cannot access this area.</p>
-        </div>
-      );
-    }
-    return children;
-  };
-
+function Routed() {
+  const { token, role } = useSession();
+  const home = firstAllowedPath(role);
   return (
-    <ToastProvider>
-      <BrowserRouter>
-      <Routes>
-        <Route 
-          path="/login" 
-          element={token ? <Navigate to="/dashboard" replace /> : <Login onLogin={handleLogin} />} 
-        />
-        
-        {/* Main Application Routes inside Layout */}
-        <Route path="/" element={token ? <Layout role={role} onLogout={handleLogout} /> : <Navigate to="/login" />}>
-          <Route index element={<Navigate to="/dashboard" replace />} />
-          
-          <Route path="dashboard" element={
-            <ProtectedRoute allowedRoles={['owner', 'inventory_manager', 'procurement_officer', 'finance_officer']}>
-              <Dashboard token={token} role={role} />
-            </ProtectedRoute>
-          } />
-          
-          <Route path="pos" element={
-            <ProtectedRoute allowedRoles={['owner', 'cashier']}>
-              <POS token={token} role={role} />
-            </ProtectedRoute>
-          } />
-          
-          <Route path="inventory" element={
-            <ProtectedRoute allowedRoles={['owner', 'cashier', 'inventory_manager', 'procurement_officer', 'finance_officer']}>
-              <Inventory token={token} role={role} />
-            </ProtectedRoute>
-          } />
-          
-          <Route path="purchases" element={
-            <ProtectedRoute allowedRoles={['owner', 'procurement_officer', 'finance_officer']}>
-              <Purchases token={token} role={role} />
-            </ProtectedRoute>
-          } />
-          
-          <Route path="customers" element={
-            <ProtectedRoute allowedRoles={['owner', 'cashier', 'finance_officer']}>
-              <Customers token={token} />
-            </ProtectedRoute>
-          } />
-          
-          <Route path="ai" element={
-            <ProtectedRoute allowedRoles={['owner', 'inventory_manager', 'procurement_officer', 'finance_officer']}>
-              <AiAssistant token={token} />
-            </ProtectedRoute>
-          } />
-        </Route>
-      </Routes>
-      </BrowserRouter>
-    </ToastProvider>
+    <Routes>
+      <Route path="/login" element={token ? <Navigate to={home} replace /> : <Login />} />
+      <Route element={token ? <AppShell /> : <Navigate to="/login" replace />}>
+        <Route index element={<Navigate to={home} replace />} />
+        {PAGES.map(([area, Page]) => (
+          <Route
+            key={area}
+            path={area}
+            element={(
+              <Guard area={area}>
+                <Suspense fallback={<div className="grid h-64 place-items-center"><Spinner /></div>}>
+                  <Page />
+                </Suspense>
+              </Guard>
+            )}
+          />
+        ))}
+        {/* Old links from the previous UI */}
+        <Route path="ai" element={<Navigate to="/copilot" replace />} />
+        <Route path="*" element={<Navigate to={home} replace />} />
+      </Route>
+    </Routes>
   );
 }
 
-export default App;
+export default function App() {
+  return (
+    <ThemeProvider>
+      <SessionProvider>
+        <ToastProvider>
+          <BrowserRouter>
+            <Routed />
+          </BrowserRouter>
+        </ToastProvider>
+      </SessionProvider>
+    </ThemeProvider>
+  );
+}

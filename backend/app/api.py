@@ -134,6 +134,11 @@ def get_products(
             "unit_cost": p.unit_cost,
             "stock_level": inv.stock_level if inv else 0,
             "reorder_point": inv.reorder_point if inv else 0,
+            "sku": p.sku,
+            "barcode": p.barcode,
+            "min_stock": p.min_stock,
+            "max_stock": p.max_stock,
+            "is_active": p.is_active is not False,
         })
     return results
 

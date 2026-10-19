@@ -1,259 +1,178 @@
-import React, { useState, useEffect } from 'react';
-import { StatCard, Chart, Card, DataTable, Modal, RoleGate } from '../components/ui';
-import { useToast } from '../components/ToastProvider';
-import { WhatIfPanel } from '../components/WhatIfPanel';
-import { AlertsPanel } from '../components/AlertsPanel';
-import api from '../api';
+import { useState } from 'react';
+import { Link } from 'react-router-dom';
+import {
+  AlertTriangle, ArrowRight, BrainCircuit, Gauge, PackageX, Receipt, Truck, Wallet,
+} from 'lucide-react';
+import { useApi } from '../core/useApi';
+import { useSession } from '../core/session';
+import { AGENT_LABELS, DECISION_TYPES, SEVERITY_TONE } from '../core/constants';
+import { date, formatRecommendation, humanize, money, moneyCompact, num, pct } from '../core/format';
+import { Badge, Card, Empty, ErrorNote, PageHeader, Progress, Segmented, Skeleton, StatCard } from '../components/ui';
+import { HBarChart, TrendChart } from '../components/charts';
 
-const TRIGGER_ROLES = {
-  reorder_quantity:          ['owner', 'inventory_manager', 'procurement_officer'],
-  price_adjustment:          ['owner', 'finance_officer'],
-  promotion_trigger:         ['owner', 'inventory_manager'],
-  staffing_adjustment:       ['owner', 'inventory_manager', 'finance_officer'],
-  customer_retention_action: ['owner', 'inventory_manager'],
-};
+export default function Dashboard() {
+  const { role } = useSession();
+  const metrics = useApi('/tenants/metrics');
+  const twin = useApi('/tenants/twin');
+  const history = useApi('/tenants/sales-history?days=90');
+  const decisions = useApi('/tenants/decisions', { initial: [] });
+  const events = useApi('/tenants/monitoring/events', { initial: [] });
+  const [series, setSeries] = useState('revenue');
 
-const TYPE_COLORS = {
-  reorder_quantity:          '#60a5fa',
-  price_adjustment:          '#c084fc',
-  promotion_trigger:         '#fbbf24',
-  staffing_adjustment:       '#34d399',
-  customer_retention_action: '#f472b6',
-};
+  const m = metrics.data;
+  const t = twin.data;
+  const productName = (id) => t?.inventory?.find(p => p.product_id === id)?.name || id;
+  const lowStock = (t?.inventory || []).filter(p => p.stock_level <= p.reorder_point);
+  const reliability = Object.entries(m?.agent_reliability || {})
+    .map(([agent, score]) => ({ label: AGENT_LABELS[agent] || agent, score }))
+    .sort((a, b) => b.score - a.score);
 
-const humanize = (s) => (s || '').replace(/_/g, ' ');
-
-// Present a fused recommendation on its decision type's axis
-const formatRecommendation = (value, decisionType) => {
-  if (typeof value !== 'number') return '—';
-  switch (decisionType) {
-    case 'price_adjustment':          return `${value >= 0 ? '+' : ''}$${value.toFixed(2)}`;
-    case 'promotion_trigger':         return `${(value * 100).toFixed(1)}% discount`;
-    case 'customer_retention_action': return `${(value * 100).toFixed(1)}% retention`;
-    case 'staffing_adjustment':       return `${value >= 0 ? '+' : ''}${value.toFixed(1)} h`;
-    default:                          return `${value.toFixed(1)} units`;
-  }
-};
-
-function Skeleton() {
-  return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '20px' }}>
-      {[0,1,2,3].map(i => (
-        <div key={i} style={{
-          height: '110px', borderRadius: '12px',
-          background: 'linear-gradient(90deg, rgba(255,255,255,0.04) 25%, rgba(255,255,255,0.08) 50%, rgba(255,255,255,0.04) 75%)',
-          backgroundSize: '200% 100%',
-          animation: 'shimmer 1.5s infinite',
-        }} />
-      ))}
-      <style>{`@keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }`}</style>
-    </div>
-  );
-}
-
-export const Dashboard = ({ role }) => {
-  const { showToast } = useToast();
-  const [metrics, setMetrics]       = useState(null);
-  const [salesData, setSalesData]   = useState([]);
-  const [decisions, setDecisions]   = useState([]);
-  const [products, setProducts]     = useState([]);
-  const [loading, setLoading]       = useState(true);
-  const [error, setError]           = useState(null);
-  const [selectedDecision, setSelectedDecision] = useState(null);
-
-  // Trigger widget state
-  const [triggerProductId, setTriggerProductId] = useState('');
-  const [triggerDate, setTriggerDate]           = useState(new Date().toISOString().slice(0, 10));
-  const [triggerType, setTriggerType]           = useState('reorder_quantity');
-  const [triggerLoading, setTriggerLoading]     = useState(false);
-  const [triggerResult, setTriggerResult]       = useState(null);
-  const [triggerError, setTriggerError]         = useState(null);
-
-  useEffect(() => {
-    const fetchAll = async () => {
-      try {
-        const [m, d, p] = await Promise.all([
-          api.get('/tenants/metrics'),
-          api.get('/tenants/decisions'),
-          api.get('/tenants/products').catch(() => []),
-        ]);
-        setMetrics(m);
-        setDecisions((d || []).slice(0, 8));
-        setProducts(p || []);
-
-        if (role === 'owner' || role === 'finance_officer') {
-          const s = await api.get('/tenants/reports?type=sales_summary');
-          setSalesData(s.data || []);
-        }
-      } catch (e) {
-        setError(e.message);
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchAll();
-  }, [role]);
-
-  const handleTrigger = async () => {
-    if (!triggerProductId) { setTriggerError('Choose a product'); return; }
-    setTriggerLoading(true); setTriggerResult(null); setTriggerError(null);
-    try {
-      const result = await api.post('/tenants/decisions/trigger', {
-        product_id: triggerProductId,
-        date_str: triggerDate,
-        decision_type: triggerType,
-      });
-      setTriggerResult(result);
-      showToast('AMDIE analysis complete', 'success');
-      const d = await api.get('/tenants/decisions');
-      setDecisions((d || []).slice(0, 8));
-    } catch (e) {
-      setTriggerError(e.message);
-    } finally {
-      setTriggerLoading(false);
-    }
-  };
-
-  const decisionCols = [
-    { header: 'Product', render: r => <span>{productName(r.product_id)}</span> },
-    { header: 'Type', render: r => {
-      const color = TYPE_COLORS[r.decision_type] || '#94a3b8';
-      return <span style={{ background: `${color}22`, color, padding: '2px 8px', borderRadius: '12px', fontSize: '12px' }}>{humanize(r.decision_type)}</span>;
-    }},
-    { header: 'Recommendation', render: r => <span>{formatRecommendation(r.fused_recommendation, r.decision_type)}</span> },
-    { header: '', render: r => r.conflict_detected ? <span title="Conflict detected">⚠️</span> : null },
-    { header: 'Date', render: r => r.date ? new Date(r.date).toLocaleDateString() : '—' },
-  ];
-
-  function productName(id) {
-    const p = products.find(x => x.id === id);
-    return p ? p.name : (id || '—');
-  }
-
-  // Determine which trigger options this role can see
-  const visibleTriggerOptions = Object.entries(TRIGGER_ROLES).filter(([, roles]) => roles.includes(role));
+  const historyData = history.data?.data || [];
+  const periodTotal = historyData.reduce((s, d) => s + (series === 'revenue' ? d.revenue : d.units), 0);
+  const staleDays = history.data?.as_of
+    ? Math.round((Date.now() - new Date(history.data.as_of).getTime()) / 86400000)
+    : 0;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '28px' }}>
-      <h2 style={{ margin: 0, fontSize: '22px' }}>AMDIE Control Tower</h2>
+    <>
+      <PageHeader
+        title="Control tower"
+        description={t ? `${t.business_name} · goal: ${humanize(t.business_goal)} · as of ${date(t.run_date)}` : 'Live overview of your business.'}
+      />
+      <ErrorNote className="mb-4">{metrics.error || twin.error}</ErrorNote>
 
-      {error && (
-        <div style={{ background: 'rgba(248,113,113,0.15)', border: '1px solid #f87171', color: '#fca5a5', padding: '12px 16px', borderRadius: '8px' }}>
-          ⚠️ {error}
-        </div>
-      )}
-
-      {/* Stat cards */}
-      {loading ? <Skeleton /> : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '20px' }}>
-          <StatCard title="Today's Revenue" value={`$${(metrics?.total_revenue_today || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} icon="💵" color="#4ade80" />
-          <StatCard title="Today's Transactions" value={String(metrics?.total_transactions_today || 0)} icon="🧾" color="#60a5fa" />
-          <RoleGate allowedRoles={['owner', 'inventory_manager', 'procurement_officer']} currentRole={role}>
-            <StatCard
-              title="Low Stock Items"
-              value={String(metrics?.low_stock_count || 0)}
-              icon="📦"
-              color={(metrics?.low_stock_count || 0) > 0 ? '#f87171' : '#4ade80'}
-            />
-          </RoleGate>
-          <StatCard title="AI Accuracy" value={`${((metrics?.cumulative_accuracy || 0) * 100).toFixed(1)}%`} icon="🧠" color="#8b5cf6" />
-          <RoleGate allowedRoles={['owner', 'procurement_officer']} currentRole={role}>
-            <StatCard title="Pending POs" value={String(metrics?.pending_po_count || 0)} icon="🚚" color="#fbbf24" />
-          </RoleGate>
-        </div>
-      )}
-
-      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '24px' }}>
-        {/* Revenue chart — owner & finance_officer only */}
-        <RoleGate allowedRoles={['owner', 'finance_officer']} currentRole={role}>
-          <Card title="Sales Revenue (Last 30 Days)">
-            {salesData.length === 0
-              ? <p style={{ color: '#64748b', textAlign: 'center' }}>No sales data in this period.</p>
-              : <Chart data={salesData} dataKeys={['revenue']} xAxisKey="date" />}
-          </Card>
-        </RoleGate>
-
-        {/* AMDIE Trigger widget */}
-        {visibleTriggerOptions.length > 0 && (
-          <Card title="Run AMDIE Analysis">
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              <select
-                value={triggerProductId}
-                onChange={e => setTriggerProductId(e.target.value)}
-                style={{ padding: '10px', borderRadius: '6px', background: '#1a1a2e', border: '1px solid rgba(255,255,255,0.15)', color: '#fff' }}
-              >
-                <option value="">Select a product…</option>
-                {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-              </select>
-              <input
-                type="date"
-                value={triggerDate}
-                onChange={e => setTriggerDate(e.target.value)}
-                style={{ padding: '10px', borderRadius: '6px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.15)', color: '#fff' }}
-              />
-              <select
-                value={triggerType}
-                onChange={e => setTriggerType(e.target.value)}
-                style={{ padding: '10px', borderRadius: '6px', background: '#1a1a2e', border: '1px solid rgba(255,255,255,0.15)', color: '#fff' }}
-              >
-                {visibleTriggerOptions.map(([dt]) => (
-                  <option key={dt} value={dt}>{humanize(dt)}</option>
-                ))}
-              </select>
-              {triggerError && <span style={{ color: '#f87171', fontSize: '13px' }}>{triggerError}</span>}
-              <button
-                onClick={handleTrigger}
-                disabled={triggerLoading}
-                style={{ padding: '12px', borderRadius: '8px', background: triggerLoading ? 'rgba(139,92,246,0.4)' : '#8b5cf6', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer' }}
-              >
-                {triggerLoading ? 'Running…' : '▶ Run Analysis'}
-              </button>
-              {triggerResult && (
-                <div style={{ background: 'rgba(74,222,128,0.08)', border: '1px solid #4ade80', borderRadius: '8px', padding: '12px', fontSize: '13px', color: '#a7f3d0' }}>
-                  <strong>Fused recommendation:</strong> {formatRecommendation(triggerResult.fused_recommendation, triggerResult.decision_type)}<br />
-                  <strong>Conflict:</strong> {triggerResult.conflict_detected ? '⚠️ Yes' : '✓ No'}<br />
-                  <span style={{ color: '#64748b' }}>{triggerResult.explanation?.slice(0, 180)}…</span>
-                </div>
-              )}
-            </div>
-          </Card>
-        )}
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-3 2xl:grid-cols-6">
+        <StatCard label="Revenue today" value={money(m?.total_revenue_today)} icon={Receipt} tone="success" loading={metrics.loading} />
+        <StatCard label="Transactions today" value={num(m?.total_transactions_today)} icon={Receipt} tone="info" loading={metrics.loading} />
+        <StatCard label="Cash balance" value={moneyCompact(t?.finance?.cash_balance)} hint={t ? `Budget ${moneyCompact(t.finance.period_budget)}` : null} icon={Wallet} tone="primary" loading={twin.loading} />
+        <StatCard label="Below reorder point" value={num(lowStock.length)} hint={t ? `of ${t.inventory.length} products` : null} icon={PackageX} tone={lowStock.length ? 'danger' : 'success'} loading={twin.loading} />
+        <StatCard label="Pending POs" value={num(m?.pending_po_count)} icon={Truck} tone="warning" loading={metrics.loading} />
+        <StatCard label="AI accuracy" value={pct(m?.cumulative_accuracy, 1)} hint={m ? `${m.total_decisions} decisions logged` : null} icon={BrainCircuit} tone="violet" loading={metrics.loading} />
       </div>
 
-      {/* Monitoring alerts + automation actions */}
-      <AlertsPanel role={role} productName={productName} />
+      <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-3">
+        <Card
+          className="xl:col-span-2"
+          title="Sales history"
+          subtitle={history.data?.as_of ? `90 days to ${date(history.data.as_of)} · ${series === 'revenue' ? money(periodTotal) : `${num(periodTotal)} units`}` : 'Daily sales from the business twin'}
+          actions={<Segmented value={series} onChange={setSeries} options={[{ value: 'revenue', label: 'Revenue' }, { value: 'units', label: 'Units' }]} />}
+        >
+          {history.loading ? <Skeleton className="h-[260px]" />
+            : historyData.length === 0 ? <Empty title="No sales recorded yet" />
+            : (
+              <>
+                {staleDays > 7 && (
+                  <p className="mb-3 flex items-center gap-2 rounded-lg bg-warning-soft px-3 py-2 text-xs text-warning">
+                    <AlertTriangle className="size-3.5 shrink-0" />
+                    The latest recorded sale is {staleDays} days old, so forecasts that use today’s date will see little recent demand.
+                  </p>
+                )}
+                <TrendChart
+                  data={historyData}
+                  dataKey={series}
+                  color={series === 'revenue' ? 'primary' : 'violet'}
+                  formatter={(v) => (series === 'revenue' ? money(v) : `${num(v)} units`)}
+                  yFormatter={(v) => (series === 'revenue' ? moneyCompact(v) : num(v))}
+                />
+              </>
+            )}
+        </Card>
 
-      {/* Counterfactual Scenario Simulation Panel */}
-      <RoleGate allowedRoles={['owner', 'inventory_manager', 'procurement_officer', 'finance_officer']} currentRole={role}>
-        <WhatIfPanel products={products} />
-      </RoleGate>
+        <Card title="Agent reliability" subtitle="Learned from logged outcomes; drives AMDIE weights" icon={Gauge}>
+          {metrics.loading ? <Skeleton className="h-40" />
+            : reliability.length === 0 ? <Empty title="No reliability scores yet" />
+            : (
+              <div className="space-y-3.5">
+                {reliability.map(r => (
+                  <div key={r.label}>
+                    <div className="mb-1 flex justify-between text-xs">
+                      <span className="font-medium text-ink-2">{r.label}</span>
+                      <span className="num text-muted">{pct(r.score)}</span>
+                    </div>
+                    <Progress value={r.score} tone={r.score >= 0.8 ? 'success' : r.score >= 0.6 ? 'warning' : 'danger'} />
+                  </div>
+                ))}
+                <div className="mt-4 grid grid-cols-2 gap-3 border-t border-line pt-4 text-center">
+                  <div>
+                    <p className="num text-lg font-semibold text-ink">{pct((m?.conflict_percentage || 0) / 100)}</p>
+                    <p className="text-xs text-muted">decisions with conflict</p>
+                  </div>
+                  <div>
+                    <p className="num text-lg font-semibold text-ink">{pct(t?.risk_level)}</p>
+                    <p className="text-xs text-muted">business risk level</p>
+                  </div>
+                </div>
+              </div>
+            )}
+        </Card>
+      </div>
 
-      {/* Recent decisions feed */}
-      <Card title="Recent AI Decisions">
-        {decisions.length === 0
-          ? <p style={{ color: '#64748b', textAlign: 'center' }}>No decisions yet. Trigger an AMDIE analysis above.</p>
-          : (
-            <DataTable
-              columns={decisionCols}
-              data={decisions}
-              onRowClick={setSelectedDecision}
-            />
+      <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-3">
+        <Card
+          className="xl:col-span-2"
+          title="Recent AMDIE decisions"
+          padded={false}
+          actions={<Link to="/decisions" className="flex items-center gap-1 text-xs font-medium text-primary hover:underline">Decision Studio <ArrowRight className="size-3.5" /></Link>}
+        >
+          {decisions.loading ? <div className="p-5"><Skeleton className="h-40" /></div>
+            : decisions.data.length === 0 ? <Empty title="No decisions yet">Run an analysis from the Decision Studio.</Empty>
+            : (
+              <ul className="divide-y divide-line">
+                {decisions.data.slice(0, 6).map(d => {
+                  const type = DECISION_TYPES[d.decision_type] || { label: humanize(d.decision_type), tone: 'neutral' };
+                  return (
+                    <li key={d.id}>
+                      <Link to={`/decisions?id=${d.id}`} className="flex items-center gap-4 px-5 py-3 hover:bg-surface-2">
+                        <Badge tone={type.tone} className="hidden sm:inline-flex">{type.label}</Badge>
+                        <span className="min-w-0 flex-1 truncate text-sm text-ink">{productName(d.product_id)}</span>
+                        {d.conflict_detected && <Badge tone="warning" dot className="hidden sm:inline-flex">conflict</Badge>}
+                        <span className="num shrink-0 text-right text-sm font-medium text-ink sm:w-36">{formatRecommendation(d.fused_recommendation, d.decision_type)}</span>
+                        <span className="hidden w-24 text-right text-xs text-muted sm:block">{date(d.date)}</span>
+                      </Link>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+        </Card>
+
+        <Card
+          title="Open alerts"
+          padded={false}
+          actions={<Link to="/monitoring" className="flex items-center gap-1 text-xs font-medium text-primary hover:underline">All alerts <ArrowRight className="size-3.5" /></Link>}
+        >
+          {events.loading ? <div className="p-5"><Skeleton className="h-40" /></div>
+            : events.data.length === 0 ? <Empty title="All clear">No open monitoring alerts.</Empty>
+            : (
+              <ul className="divide-y divide-line">
+                {events.data.slice(0, 6).map(e => (
+                  <li key={e.id} className="flex items-center justify-between gap-3 px-5 py-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-ink capitalize">{humanize(e.event_type)}</p>
+                      <p className="truncate text-xs text-muted">
+                        {e.entity_type === 'product' ? productName(e.entity_id) : (t?.supply_network?.find(s => s.supplier_id === e.entity_id)?.name || e.entity_type)}
+                      </p>
+                    </div>
+                    <Badge tone={SEVERITY_TONE[e.severity] || 'neutral'}>{e.severity}</Badge>
+                  </li>
+                ))}
+              </ul>
+            )}
+        </Card>
+      </div>
+
+      {m?.decision_type_stats && (
+        <Card className="mt-6" title="Decision types" subtitle="How each AMDIE decision type has performed so far">
+          <HBarChart
+            data={Object.entries(m.decision_type_stats).map(([k, s]) => ({ label: DECISION_TYPES[k]?.label || s.label, total: s.total_decisions }))}
+            dataKey="total"
+            formatter={(v) => `${v} decisions`}
+          />
+          {role === 'owner' && (
+            <p className="mt-2 text-xs text-muted">Log real outcomes in the Decision Studio so AMDIE can keep learning which agents to trust.</p>
           )}
-      </Card>
-
-      {/* Decision detail modal */}
-      {selectedDecision && (
-        <Modal isOpen title="Decision Detail" onClose={() => setSelectedDecision(null)}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            <p style={{ color: '#94a3b8', fontSize: '13px', margin: 0 }}>Product: <strong style={{ color: '#fff' }}>{productName(selectedDecision.product_id)}</strong></p>
-            <p style={{ color: '#94a3b8', fontSize: '13px', margin: 0 }}>Type: <strong style={{ color: '#fff' }}>{humanize(selectedDecision.decision_type)}</strong></p>
-            <p style={{ color: '#94a3b8', fontSize: '13px', margin: 0 }}>Recommendation: <strong style={{ color: '#4ade80' }}>{formatRecommendation(selectedDecision.fused_recommendation, selectedDecision.decision_type)}</strong></p>
-            <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: '8px', padding: '16px', maxHeight: '300px', overflowY: 'auto', color: '#cbd5e1', fontSize: '13px', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
-              {selectedDecision.natural_language_explanation || 'No explanation available.'}
-            </div>
-          </div>
-        </Modal>
+        </Card>
       )}
-    </div>
+    </>
   );
-};
+}
